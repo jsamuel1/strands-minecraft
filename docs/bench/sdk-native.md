@@ -117,7 +117,7 @@ released 1.64.0 wheel.
 | Decision state | aligned history, no empties, per-model char budget measured as `json.dumps` | same; budget measured with `pyJson` (Python separators) |
 | Questions per step | `next_action` + `last_step_succeeded` | same |
 | Agent arm | LLM + tools, `limits={"turns": 4}` per step | SDK `Agent`, same tools, upstream system prompt, `limits: { turns: 4 }` |
-| Telemetry | Episode JSONL | same field names, plus `strands_sdk`, `option_rendering`, `setup_s`, per-decision `prob_sum` |
+| Telemetry | Episode JSONL | same field names, plus `strands_sdk`, `option_rendering`, `setup_s`, `mc_image`, per-decision `prob_sum` |
 
 One difference to name when comparing: v3 sent the state as a JSON object and
 the decider rendered it with `json.dumps(indent=2, ensure_ascii=False)`; this
@@ -131,6 +131,14 @@ loop checks the wall cap before each step; the agent arm also cancels a turn at
 the deadline. Success is `task.check()` over body state after each step.
 Infrastructure failures (`error`) are counted apart from model failures, and an
 episode process that dies without writing a row gets an infra row.
+
+What "reproducible reset" covers: every episode starts from a new container
+with the same image tag, game version and seed, a world on tmpfs, a fresh
+`MEMORY_DIR` and a fresh process. That fixes terrain and spawn. It does not fix
+mob spawning, mob movement or server tick timing, so two same-seed episodes can
+differ, as they did in v3. `itzg/minecraft-server:latest` is a moving tag: each
+row records the digest it ran (`mc_image`); pin `BENCH_MC_IMAGE` to that digest
+for a cohort.
 
 ## Run it
 
@@ -179,13 +187,12 @@ Knobs: `BENCH_MC_IMAGE`, `BENCH_MC_VERSION`, `BENCH_SEED`, `--port-base`
 ## Validation on this branch
 
 Smoke run `bench-results/sdk-native/2026-11-09-smoke-decider-cpu/` (harness
-`9f3c26e`, CPU decider on this host, no paid infra), n = 1 per task:
+`667612f`, CPU decider on this host, no paid infra), n = 1 per task:
 
-- wood_tools: success in 5 decisions (explore_north, fell_tree_0,
-  craft_crafting_table, place_crafting_table, craft_wooden_pickaxe, each `done`
-  by the world check); loop 47.7 s, decide 24.5 s, setup 33.8 s, 63 tool calls,
-  0 deaths.
-- logs16: success in 5 decisions; loop 108.9 s, decide 22.2 s.
+- wood_tools: success in 8 decisions, each `done` by the world check; loop
+  186.4 s, decide 54.9 s, setup 33.5 s, 94 tool calls, 0 deaths.
+- logs16: success in 4 decisions; loop 106.7 s, decide 15.3 s.
 
-3 of the 10 answers had `prob_sum` 0.9999 or 1.0001. One episode per task is a
-smoke test, not a result.
+5 of the 12 answers had `prob_sum` 0.9999 or 1.0001. One episode per task is a
+smoke test, not a result. The seed fixes terrain, not mob or tick timing, so
+same-seed episodes differ (an earlier same-seed wood_tools took 5 decisions).

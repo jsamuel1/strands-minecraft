@@ -58,6 +58,7 @@ export async function runEpisode(o: EpisodeOptions): Promise<Episode> {
   let rig: import('./rig.js').Rig | undefined;
   try {
     await world.start();
+    ep.mc_image = await World.imageDigest();
     for (const cmd of o.task.setup) await world.rcon(cmd);
     const { createLiveBody } = await import('../body.js');
     const { Rig } = await import('./rig.js');

@@ -59,6 +59,8 @@ export interface Episode {
   option_rendering: string | null;
   /** Wall time from episode start to the brain's first step (world + body bootstrap). */
   setup_s: number | null;
+  /** The server image digest this episode ran (the tag can move). */
+  mc_image: string | null;
 }
 
 export function newEpisode(p: Pick<Episode, 'run_id' | 'arm' | 'kind' | 'model_label' | 'task' | 'episode' | 'seed' | 'mc_version' | 'brain_commit' | 'strands_sdk'>): Episode {
@@ -70,7 +72,7 @@ export function newEpisode(p: Pick<Episode, 'run_id' | 'arm' | 'kind' | 'model_l
     latency_p50_ms: null, latency_p95_ms: null, server_latency_p50_ms: null, provider_errors: {}, error_samples: {},
     instance_type: null, throttles: 0, answering_models: [], final_inventory: {}, actions: [], decisions: [], error: null,
     cap_hit: null, loop_s: null, decide_s: null, call_latencies_ms: [], state_chars_budget: null, history_steps_budget: null,
-    context_profile: {}, harness: HARNESS, option_rendering: null, setup_s: null,
+    context_profile: {}, harness: HARNESS, option_rendering: null, setup_s: null, mc_image: null,
   };
 }
 

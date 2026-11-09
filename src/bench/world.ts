@@ -31,6 +31,12 @@ export class World {
   readonly name = `bench-mc-${randomBytes(4).toString('hex')}`;
   constructor(readonly port: number, readonly rconPort: number) {}
 
+  /** The digest the image tag resolved to: `latest` moves, the digest does not. */
+  static async imageDigest(image = worldCfg.image): Promise<string | null> {
+    const { stdout } = await run('docker', ['image', 'inspect', image, '--format', '{{index .RepoDigests 0}}']).catch(() => ({ stdout: '' }));
+    return stdout.trim() || null;
+  }
+
   async start(timeoutS = 240): Promise<this> {
     await run('docker', dockerRunArgs(this.name, this.port, this.rconPort));
     const deadline = Date.now() + timeoutS * 1000;
