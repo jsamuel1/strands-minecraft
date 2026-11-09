@@ -1,10 +1,10 @@
 {
   "generated_by": "scripts/site-numbers.mjs",
-  "commit": "b3799f8",
+  "commit": "d46e87b",
   "version": "0.1.0",
   "node": ">=22",
   "license": "MIT",
-  "strands": "^1.13.0",
+  "strands": "^1.24.0",
   "mineflayer": "^4.37.1",
   "tools": 61,
   "toolNames": [
@@ -259,10 +259,10 @@
     "write_book": "src/tools/inventory.ts:363",
     "write_sign": "src/tools/world.ts:358"
   },
-  "testFiles": 88,
-  "testCases": 862,
-  "loc": 21408,
-  "srcFiles": 57,
+  "testFiles": 91,
+  "testCases": 891,
+  "loc": 23494,
+  "srcFiles": 70,
   "rails": 7,
   "routes": [
     {
@@ -356,7 +356,7 @@
       "path": "AGENTS.md",
       "title": "AGENTS.md",
       "hook": "Guide for AI coding agents working in strands-minecraft — a Minecraft bot where every bot is a Strands agent and the full mineflayer surface is exposed as tools.",
-      "words": 1389,
+      "words": 1411,
       "minutes": 7
     }
   ],

@@ -27,7 +27,7 @@ export const TURN_ECONOMY = `One call beats ten — several tools finish a whole
 - remember_place/recall_places waypoints: save home, base, farms once — recall beats
   re-exploring.`;
 
-const SYSTEM_PROMPT = `You are a Minecraft bot embodied in a live game world via mineflayer.
+export const SYSTEM_PROMPT = `You are a Minecraft bot embodied in a live game world via mineflayer.
 Your username in game is "{username}".
 
 You have real tools: perception (look around, find blocks, inventory), movement

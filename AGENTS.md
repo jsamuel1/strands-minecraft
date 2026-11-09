@@ -3,7 +3,7 @@
 Guide for AI coding agents working in **strands-minecraft** — a Minecraft bot
 where every bot *is* a [Strands](https://github.com/strands-agents) agent and
 the full mineflayer surface is exposed as tools. ~18k lines of TypeScript,
-88 test files, runs through `tsx` (no build step to run).
+91 test files, runs through `tsx` (no build step to run).
 
 Human docs live in `README.md` (features + how to play). This file is the
 map for *changing the code*.
@@ -155,7 +155,9 @@ src/
 ├── config.ts       every tunable, one registry, env override + why
 ├── voice*.ts, realtime/   push-to-talk, realtime call, voice bridge
 ├── web.ts, web/    dashboard (MJPEG/SSE/say), passkey auth, tiny endpoint
+├── body-rails.ts   pain / hunger / death rails, shared by index.ts and bench/
+├── bench/          SDK-native decider benchmark (npm run bench; docs/bench/sdk-native.md)
 └── tools/          61 game tools by domain
-test/               74 node:test files (fake world + fake bot)
+test/               91 node:test files (fake world + fake bot)
 docs/               landing page + numbers.json + findings/
 ```
