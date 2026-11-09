@@ -623,7 +623,7 @@ export class PolicyBrain {
     this.wait = o.wait ?? sleep;
   }
 
-  async step(): Promise<Decision> {
+  async step(cancelSignal?: AbortSignal): Promise<Decision> {
     const tStart = this.now();
     const ob = await observe(this.body, this.o.profile);
     const acts = candidates(ob);
@@ -636,7 +636,7 @@ export class PolicyBrain {
     const t0 = performance.now();
     let resp;
     try {
-      resp = await this.model.ask(serializeState(state), questions as Record<string, Question>);
+      resp = await this.model.ask(serializeState(state), questions as Record<string, Question>, { cancelSignal });
     } catch (err) {
       const msg = `${err instanceof Error ? err.name : 'Error'}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
       const d: Decision = {

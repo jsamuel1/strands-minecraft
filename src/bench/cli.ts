@@ -19,8 +19,11 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TASKS } from './tasks.js';
 import { createDecisionModel, resolveDecisionSpec } from './decider.js';
-import { PROFILES } from './policy.js';
-import type { Arm } from './runner.js';
+import { HARNESS } from './episode.js';
+import { PROFILES, policyCfg } from './policy.js';
+import { BENCH_BODY_ENV, type Arm } from './runner.js';
+import { worldCfg } from './world.js';
+import { cfg } from '../config.js';
 
 export const RESULTS_ROOT = 'bench-results/sdk-native';
 export const ARMS = ['decider', 'jev', 'llm-policy', 'agent'] as const;
@@ -70,13 +73,43 @@ export async function armFor(name: string): Promise<Arm> {
   throw new Error(`unknown arm ${JSON.stringify(name)} — use one of ${ARMS.join(', ')}`);
 }
 
+export function buildRunManifest(p: { runId: string; arms: string[]; tasks: string[]; n: number; startedAt: string; argv: string[] }) {
+  const body = {
+    env: { ...BENCH_BODY_ENV },
+    safety_reflexes: true,
+    sentinel: true,
+    config: {
+      sentinel: { ...cfg.sentinel },
+      reflex: { ...cfg.reflex },
+      combat: { ...cfg.combat, flyers: [...cfg.combat.flyers], neverPunch: [...cfg.combat.neverPunch] },
+    },
+  };
+  return {
+    harness: HARNESS,
+    run_id: p.runId,
+    arms: p.arms,
+    tasks: p.tasks,
+    n: p.n,
+    started_at: p.startedAt,
+    argv: p.argv,
+    world: { image: worldCfg.image, version: worldCfg.version, seed: worldCfg.seed, difficulty: 'easy', mode: 'survival', tmpfs: '/data:size=3g' },
+    task_budgets: Object.fromEntries(p.tasks.map((id) => [id, { steps: TASKS[id].maxSteps, wall_s: TASKS[id].maxWallS }])),
+    policy: {
+      ...policyCfg,
+      profiles: Object.fromEntries(p.arms.filter((a) => a !== 'agent').map((a) => [a, { ...(a === 'decider' ? PROFILES.decider : PROFILES.jev) }])),
+    },
+    body,
+  };
+}
+
 async function episodeCmd(flags: Record<string, string>) {
   const { runEpisode, appendJsonl } = await import('./runner.js');
   const task = TASKS[flags.task];
   if (!task) throw new Error(`unknown task ${flags.task}`);
   const base = Number(flags['port-base'] || 25600);
-  const ep = await runEpisode({ runId: flags['run-id'], arm: await armFor(flags.arm), task, n: Number(flags.n), ports: [base, base + 1], logDir: join(flags.out, 'logs') });
-  appendJsonl(join(flags.out, 'episodes.jsonl'), ep);
+  const out = resolveOut(flags.out, flags['run-id']);
+  const ep = await runEpisode({ runId: flags['run-id'], arm: await armFor(flags.arm), task, n: Number(flags.n), ports: [base, base + 1], logDir: join(out, 'logs') });
+  appendJsonl(join(out, 'episodes.jsonl'), ep);
   console.log(`${ep.arm} ${ep.task} #${ep.episode}: ${ep.success ? 'success' : ep.error ? `infra: ${ep.error}` : `fail (${ep.cap_hit})`} steps=${ep.steps} loop=${ep.loop_s}s decide=${ep.decide_s}s`);
   // The body's rails keep interval timers (sentinel radar, reflex tick) that the game bot never
   // needs to end. The row is on disk (appendFileSync); this process exists for one episode.
@@ -89,13 +122,22 @@ function runCmd(flags: Record<string, string>) {
   for (const t of tasks) if (!TASKS[t]) throw new Error(`unknown task ${t}`);
   for (const a of arms) if (!(ARMS as readonly string[]).includes(a)) throw new Error(`unknown arm ${a}`);
   const n = Number(flags.n || 1);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--n must be a positive integer, got ${JSON.stringify(flags.n)}`);
   const runId = flags['run-id'] || `${new Date().toISOString().slice(0, 10)}-${arms.join('+')}`;
   const out = resolveOut(flags.out, runId);
-  if (existsSync(join(out, 'episodes.jsonl')) && flags.append !== 'yes') {
-    throw new Error(`${out}/episodes.jsonl exists — pick a new --out (or --append yes to add to it)`);
+  if (existsSync(join(out, 'episodes.jsonl'))) {
+    throw new Error(`${out}/episodes.jsonl exists — use a new run id/output; scored rows are append-immutable`);
   }
   mkdirSync(out, { recursive: true });
-  writeFileSync(join(out, 'run.json'), `${JSON.stringify({ run_id: runId, arms, tasks, n, started_at: new Date().toISOString(), argv: process.argv.slice(2) }, null, 2)}\n`);
+  const manifest = buildRunManifest({
+    runId,
+    arms,
+    tasks,
+    n,
+    startedAt: new Date().toISOString(),
+    argv: process.argv.slice(2),
+  });
+  writeFileSync(join(out, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   const self = fileURLToPath(import.meta.url);
   // Interleave arms within each (task, episode) so drift in host load hits every arm alike.
   for (const task of tasks) for (let i = 1; i <= n; i++) for (const arm of arms) {

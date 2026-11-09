@@ -37,4 +37,5 @@ mob movement and server tick timing still vary between episodes, so one episode
 per task says nothing about variance.
 
 Files: `episodes.jsonl` (one row per episode, v3 field names, every decision
-with its exact request), `run.json` (argv), `REPORT.md` (`npm run bench -- report`).
+with its exact request), `run.json` (resolved world/config/budgets plus argv),
+`REPORT.md` (`npm run bench -- report`).

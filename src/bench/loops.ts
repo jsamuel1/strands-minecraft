@@ -51,9 +51,11 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
   const t0 = clock.now();
   for (let i = 0; i < task.maxSteps; i++) {
     const used = clock.now() - t0;
-    if (used > task.maxWallS) break;
+    if (used >= task.maxWallS) break;
     brain.budget = budgetFor(task, i, used, ep.progress);
-    const d = await brain.step();
+    // Bound every provider by the episode's remaining wall budget. Provider
+    // defaults (or a hung custom fetch) must not let one decision overrun it.
+    const d = await brain.step(AbortSignal.timeout(Math.max(1, Math.floor((task.maxWallS - used) * 1000))));
     ep.steps += 1;
     ep.model_calls += 1;
     if (d.action === 'error' && d.error) {
@@ -112,9 +114,10 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
   const t0 = clock.now();
   for (let i = 0; i < task.maxSteps; i++) {
     const used = clock.now() - t0;
-    if (used > task.maxWallS) break;
+    if (used >= task.maxWallS) break;
     const prompt = i === 0 ? AGENT_FIRST_PROMPT(task.goal) : `Status:\n${body.digest?.() ?? ''}\nContinue toward the goal: ${task.goal}`;
-    const remainingMs = Math.max(1000, (task.maxWallS - used) * 1000);
+    const remainingMs = Math.max(1, Math.floor((task.maxWallS - used) * 1000));
+    let cancelled = false;
     body.setBusy(true);
     try {
       const r = await agent.invoke(prompt, { limits: { turns: 4 }, cancelSignal: AbortSignal.timeout(remainingMs) });
@@ -125,7 +128,7 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
         ep.cache_read_tokens += u.cacheReadInputTokens ?? 0;
         ep.cache_write_tokens += u.cacheWriteInputTokens ?? 0;
       }
-      if (r.stopReason === 'cancelled') { ep.steps += 1; break; }
+      cancelled = r.stopReason === 'cancelled';
     } catch (err) {
       const n = err instanceof Error ? err.name : 'Error';
       ep.error_samples[n] ??= (err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -140,6 +143,7 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
       ep.time_to_goal_s = +(clock.now() - t0).toFixed(1);
       break;
     }
+    if (cancelled || clock.now() - t0 >= task.maxWallS) break;
   }
   ep.loop_s = +(clock.now() - t0).toFixed(1);
   if (!ep.success) ep.cap_hit = ep.steps >= task.maxSteps ? 'steps' : 'wall';

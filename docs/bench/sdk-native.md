@@ -26,8 +26,10 @@ Both SDKs are built from one monorepo,
 (`strands-ts/src/decisions/`, `strands-py/src/strands/decisions/`); tags
 `typescript/v1.24.0` and `python/v1.64.0` are commit `0bd132a06`. The design
 note the source cites is `team/designs/0020-decision-models.md`. Relevant
-commits: `8340c4241` (TS primitive), `aa2da86ee` (TS System One providers),
-`0cb69d419` (TS: HTTP 503 → `ModelThrottledError`).
+commits: `8340c4241` (TS primitive), `aa2da86ee` (TS System One providers).
+Commit `0cb69d419` adds TS HTTP 503 → `ModelThrottledError` on later mainline;
+the released 1.24.0 adapter maps 429/529, but not 503, to throttling. Python
+1.64.0 maps 429/503/529.
 
 The API (TypeScript, 1.24.0):
 
@@ -119,16 +121,22 @@ released 1.64.0 wheel.
 | Agent arm | LLM + tools, `limits={"turns": 4}` per step | SDK `Agent`, same tools, upstream system prompt, `limits: { turns: 4 }` |
 | Telemetry | Episode JSONL | same field names, plus `strands_sdk`, `option_rendering`, `setup_s`, `mc_image`, per-decision `prob_sum` |
 
-One difference to name when comparing: v3 sent the state as a JSON object and
-the decider rendered it with `json.dumps(indent=2, ensure_ascii=False)`; this
-harness sends `JSON.stringify(state, null, 2)` text. Both produce the same
-layout and key order; float formatting can differ (Python prints `20.0`, JS
-`20`) where a value arrived as a float.
+One difference to name when comparing: v3 passed a JSON object, which
+strands-decider rendered with Python `json.dumps(indent=2,
+ensure_ascii=False)`. This harness passes pre-rendered
+`JSON.stringify(state, null, 2)` text; strands-decider strips the outer string
+but does not parse and re-render it. The intended structure and key order are
+the same. Whitespace escaping and number spelling can differ, so each decision
+stores the exact request text's source object and every new run is a separate
+harness cohort.
 
-Every agent gets the same action and state budget: one decision per step, the
-task's step and wall caps, and (policy arms) the profile's state budget. The
-loop checks the wall cap before each step; the agent arm also cancels a turn at
-the deadline. Success is `task.check()` over body state after each step.
+All arms get the same task-level action and wall budgets. Policy arms get one
+native decision per step and a recorded, provider-specific state/context
+profile; the free-tool-calling agent gets one turn per step with the same
+four-cycle limit as v3. These are different interfaces, so the state-format
+budgets are comparable within policy arms rather than identical to agent chat
+history. Every decision/turn gets an abort signal for the remaining episode
+wall budget. Success is `task.check()` over body state after each step.
 Infrastructure failures (`error`) are counted apart from model failures, and an
 episode process that dies without writing a row gets an infra row.
 
@@ -176,9 +184,11 @@ Arms within one (task, episode) are interleaved.
 | `agent` | SDK `Agent` with the body's tools | same |
 
 **Where results go:** `bench-results/sdk-native/<run-id>/episodes.jsonl`, plus
-`run.json` (arms, tasks, n, argv). The CLI refuses any `--out` under
-`bench-results/` outside `sdk-native/`, and refuses to append to an existing
-run unless `--append yes`.
+`run.json` (harness, arms, tasks, n, argv, resolved world config, task budgets,
+policy profiles, forced body-rail settings and effective sentinel/reflex/combat
+configuration). The CLI refuses any `--out`
+under `bench-results/` outside `sdk-native/`, and refuses every existing
+`episodes.jsonl`; scored run directories are append-immutable.
 
 Knobs: `BENCH_MC_IMAGE`, `BENCH_MC_VERSION`, `BENCH_SEED`, `--port-base`
 (default 25600; the world uses it and +1), and v3's `POLICY_*` variables

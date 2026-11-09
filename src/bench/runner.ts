@@ -33,6 +33,15 @@ export function gitCommit(): string | null {
   } catch { return null; }
 }
 
+export const BENCH_BODY_ENV = Object.freeze({
+  REFLEX_MODES_OFF: 'item_magnet,elbow_room,idle_staring',
+  REFLEX_MODES_DISABLED: 'false',
+  SENTINEL_DISABLED: 'false',
+  REFLEX_DISABLED: 'false',
+  THINKER_DISABLED: 'true',
+  VOICE_DISABLED: 'true',
+});
+
 export interface PolicyArm { kind: 'policy'; arm: string; label: string; model: () => DecisionModel; profile: ContextProfile }
 export interface AgentArm { kind: 'agent'; arm: string; label: string; model: () => Model | Promise<Model> }
 export type Arm = PolicyArm | AgentArm;
@@ -51,8 +60,11 @@ export async function runEpisode(o: EpisodeOptions): Promise<Episode> {
   // legs/sentinel keep module state. So cli.ts runs ONE episode per child process and the body
   // modules are imported only below, after this.
   Object.assign(process.env, {
-    MEMORY_DIR: mem, REFLEX_MODES_OFF: process.env.REFLEX_MODES_OFF ?? 'item_magnet,elbow_room,idle_staring',
-    THINKER_DISABLED: 'true', VOICE_DISABLED: 'true', MC_HOST: '127.0.0.1', MC_PORT: String(o.ports[0]),
+    MEMORY_DIR: mem,
+    // Cohort controls, not inherited deployment preferences: each arm gets
+    // identical safety reflexes while autonomous loot/movement stays off.
+    ...BENCH_BODY_ENV,
+    MC_HOST: '127.0.0.1', MC_PORT: String(o.ports[0]),
     MC_USERNAME: 'StrandsBot', MC_VERSION: worldCfg.version,
   });
   let rig: import('./rig.js').Rig | undefined;

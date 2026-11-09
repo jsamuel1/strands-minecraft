@@ -26,8 +26,9 @@
  *      client round trip, as v3 recorded it.
  *
  * Everything else (wire field names, Uncertain below min confidence, HTTP
- * error mapping to ModelThrottledError / ContextWindowOverflowError) follows
- * the SDK's system-one-http-adapter at 1.24.0.
+ * error classes) follows the SDK's system-one-http-adapter at 1.24.0. This
+ * adapter also treats HTTP 503 as throttling, matching current SDK mainline;
+ * released TS 1.24.0 itself maps only 429/529 that way.
  */
 import {
   ContextWindowOverflowError,

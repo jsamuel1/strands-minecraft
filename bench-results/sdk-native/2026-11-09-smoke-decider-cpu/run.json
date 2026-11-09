@@ -1,4 +1,5 @@
 {
+  "harness": "sdk-native-v1",
   "run_id": "2026-11-09-smoke-decider-cpu",
   "arms": [
     "decider"
@@ -19,5 +20,102 @@
     "1",
     "--run-id",
     "2026-11-09-smoke-decider-cpu"
-  ]
+  ],
+  "world": {
+    "image": "itzg/minecraft-server:latest",
+    "resolved_image": "itzg/minecraft-server@sha256:8d0500eb1df76328fb2c2cd0350d5d456c1be45c7a92d6363ad35b680bdbcecf",
+    "version": "1.21.11",
+    "seed": "8675309",
+    "difficulty": "easy",
+    "mode": "survival",
+    "tmpfs": "/data:size=3g"
+  },
+  "task_budgets": {
+    "wood_tools": {
+      "steps": 24,
+      "wall_s": 480
+    },
+    "logs16": {
+      "steps": 20,
+      "wall_s": 420
+    }
+  },
+  "policy": {
+    "maxCandidates": 12,
+    "searchRadius": 48,
+    "exploreMinMove": 8,
+    "waitS": 5,
+    "profiles": {
+      "decider": {
+        "name": "decider",
+        "stateChars": 7500,
+        "historySteps": 12,
+        "eventChars": 120,
+        "maxEvents": 6,
+        "previousStates": true,
+        "outcomeChars": 240
+      }
+    }
+  },
+  "body": {
+    "env": {
+      "REFLEX_MODES_OFF": "item_magnet,elbow_room,idle_staring",
+      "REFLEX_MODES_DISABLED": "false",
+      "SENTINEL_DISABLED": "false",
+      "REFLEX_DISABLED": "false",
+      "THINKER_DISABLED": "true",
+      "VOICE_DISABLED": "true"
+    },
+    "safety_reflexes": true,
+    "sentinel": true,
+    "config": {
+      "sentinel": {
+        "radarPollMs": 1000,
+        "radarRange": 16,
+        "securityRange": 24,
+        "oxygenReflexAt": 6
+      },
+      "reflex": {
+        "unstuckAfterMs": 20000,
+        "unstuckActAfterWarnings": 3,
+        "unstuckActAfterMs": 120000,
+        "unstuckActGapMs": 60000,
+        "wedgeRejoinMs": 300000,
+        "creeperEpisodeMs": 90000,
+        "fleeTimeoutMs": 8000,
+        "fightBackMs": 2500,
+        "blindSprintMs": 1500,
+        "burnEscapeDistance": 6,
+        "sidestepDistance": 2,
+        "dyingEscapeDistance": 20,
+        "hazardCooldownMs": 3000,
+        "evacSwimMs": 4000,
+        "evacGraceMs": 1200,
+        "evacLateralRadius": 8,
+        "digHpReserve": 4
+      },
+      "combat": {
+        "answerReach": 4,
+        "swingReach": 3,
+        "drawAttempts": 3,
+        "swingIntervalMs": 600,
+        "burstMs": 1600,
+        "answerCooldownMs": 400,
+        "noteIntervalMs": 12000,
+        "flyers": [
+          "phantom",
+          "ghast",
+          "blaze",
+          "vex",
+          "wither",
+          "ender_dragon",
+          "breeze",
+          "bee"
+        ],
+        "neverPunch": [
+          "creeper"
+        ]
+      }
+    }
+  }
 }

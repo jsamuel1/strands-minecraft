@@ -12,9 +12,10 @@ import { candidates, decisionState, dropEmpty, buildQuestions, PolicyBrain, PROF
 import { checkAction, toolReason, type Snapshot } from '../src/bench/verify.js';
 import { SUITE, TASKS, UNCAPPED_STEPS, applyMarks } from '../src/bench/tasks.js';
 import { runPolicy, type Clock } from '../src/bench/loops.js';
+import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
-import { resolveOut, parseArgs } from '../src/bench/cli.js';
+import { resolveOut, parseArgs, buildRunManifest } from '../src/bench/cli.js';
 import { dockerRunArgs } from '../src/bench/world.js';
 import { SelfHostedDecisionModel } from '../src/bench/decider.js';
 
@@ -232,8 +233,31 @@ test('policy episode: the wall-clock cap binds before the next decision', async 
   const model = new ScriptedModel(() => { clock.t += 100; return 'fell_tree_0'; });
   const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
   await runPolicy(ep, model, PROFILES.decider, TASKS.logs16, b, {}, clock, { wait: noWait });
-  assert.equal(ep.steps, 5, '420 s cap: steps start at 0,100,200,300,400; 500 > 420 stops');
+  assert.equal(ep.steps, 5, '420 s cap: steps start at 0,100,200,300,400; 500 ≥ 420 stops');
   assert.equal(ep.cap_hit, 'wall');
+});
+
+test('policy episode: each native decision receives the remaining wall budget as an abort signal', async () => {
+  const b = new FakeBody();
+  b.digGives = 0;
+  const clock = fakeClock();
+  class SignalModel extends DecisionModel {
+    signals: AbortSignal[] = [];
+    protected async _ask<const Q extends Record<string, Question>>(_state: DecisionInput, questions: Q, o: DecisionCallOptions): Promise<DecisionResult<Q>> {
+      assert.ok(o.cancelSignal);
+      this.signals.push(o.cancelSignal!);
+      clock.t += 1;
+      const choices = questions.next_action.choices as readonly string[];
+      const pick = choices.includes('fell_tree_0') ? 'fell_tree_0' : choices[0];
+      return { answers: { next_action: pick } as any, metadata: { latencyMs: 1 } };
+    }
+  }
+  const model = new SignalModel();
+  const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runPolicy(ep, model, PROFILES.decider, { ...TASKS.logs16, maxSteps: 2, maxWallS: 2 }, b, {}, clock, { wait: noWait });
+  assert.equal(model.signals.length, 2);
+  assert.ok(model.signals.every((s) => !s.aborted));
+  assert.equal(ep.cap_hit, 'steps');
 });
 
 test('policy episode: a decision-model error is data, not a crash; an off-alphabet answer runs nothing', async () => {
@@ -273,6 +297,11 @@ test('reset is reproducible: fixed image tag, version, seed, tmpfs world, localh
   assert.ok(a.includes('SEED=8675309') && a.includes('VERSION=1.21.11') && a.includes('DIFFICULTY=easy'));
   assert.ok(a.includes('127.0.0.1:25600:25565'));
   assert.deepEqual(a.slice(a.indexOf('--tmpfs'), a.indexOf('--tmpfs') + 2), ['--tmpfs', '/data:size=3g']);
+  assert.deepEqual(BENCH_BODY_ENV, {
+    REFLEX_MODES_OFF: 'item_magnet,elbow_room,idle_staring',
+    REFLEX_MODES_DISABLED: 'false', SENTINEL_DISABLED: 'false', REFLEX_DISABLED: 'false',
+    THINKER_DISABLED: 'true', VOICE_DISABLED: 'true',
+  }, 'deployment env cannot silently disable safety rails or re-enable autonomous movement for one cohort');
 });
 
 test('pct matches Python statistics.quantiles(method="inclusive")', () => {
@@ -298,4 +327,16 @@ test('results guard: new results only under bench-results/sdk-native; v3 results
   assert.throws(() => resolveOut('bench-results/RESULTS-v3.md', 'x', '/repo'), /immutable/);
   assert.doesNotThrow(() => resolveOut('/tmp/scratch-run', 'x', '/repo'));
   assert.deepEqual(parseArgs(['run', '--arms', 'decider', '--n', '2', 'extra']), { cmd: 'run', flags: { arms: 'decider', n: '2' }, rest: ['extra'] });
+});
+
+test('run manifest records resolved world, budgets, policy profile and forced body configuration', () => {
+  const m = buildRunManifest({ runId: 'r', arms: ['decider', 'agent'], tasks: ['logs16'], n: 2, startedAt: '2026-11-09T00:00:00Z', argv: ['run'] });
+  assert.equal(m.harness, 'sdk-native-v1');
+  assert.equal(m.world.seed, '8675309');
+  assert.deepEqual(m.task_budgets.logs16, { steps: 20, wall_s: 420 });
+  assert.equal(m.policy.profiles.decider.stateChars, PROFILES.decider.stateChars);
+  assert.equal('agent' in m.policy.profiles, false);
+  assert.deepEqual(m.body.env, BENCH_BODY_ENV);
+  assert.equal(m.body.config.reflex.unstuckAfterMs, 20_000);
+  assert.equal(m.body.config.combat.answerReach, 4);
 });

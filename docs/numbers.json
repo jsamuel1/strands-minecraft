@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/site-numbers.mjs",
-  "commit": "3689192",
+  "commit": "3da723c",
   "version": "0.1.0",
   "node": ">=22",
   "license": "MIT",
@@ -260,8 +260,8 @@
     "write_sign": "src/tools/world.ts:358"
   },
   "testFiles": 91,
-  "testCases": 891,
-  "loc": 23509,
+  "testCases": 893,
+  "loc": 23568,
   "srcFiles": 70,
   "rails": 7,
   "routes": [
