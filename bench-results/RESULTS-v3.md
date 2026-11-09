@@ -149,12 +149,14 @@ starred) is in [`stats` below](#full-table).
 ## Raw data and logs
 
 - `bench-results/2026-09-29-v3-policy/`: Jev, Kev and CLM. `episodes.jsonl` holds every decision's exact
-  request, answer, world verdict and reason. Also `stats.md` and `logs/` (one body log per episode).
+  request, answer, world verdict and reason. Also `stats.md` and `summary.md`.
 - `bench-results/2026-09-29-v3-hobson/`: Hobson.
-- `bench-results/2026-09-28-v3/`: Sonnet 5 and Terra, plus `empties_ablation.{py,log}`.
+- `bench-results/2026-09-28-v3/`: Sonnet 5 and Terra, plus the `empties_ablation.py` reproduction script.
 - Earlier runs, each with its README: `2026-09-28-v3-run1-defective/`, `2026-09-26-v1/`, `2026-09-26-aborted/`;
   v2 is in the main checkout at `bench-results/2026-09-28-v2/`.
 - Reproduce the table: `cd brain && mcbench report <run dirs…>`.
+- Sidecar logs and the ablation output were retained outside this publication branch; the episode JSONL is
+  the raw data published here.
 - **Video:** none captured. The harness had no screenshot capture (Chrome is absent on the host). Screenshot
   capture is queued for the next run. `docs/img/hero-loop.mp4` is the upstream project's demo, not this
   benchmark.
