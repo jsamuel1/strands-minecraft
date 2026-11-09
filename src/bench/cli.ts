@@ -14,7 +14,7 @@
  * Results default to bench-results/sdk-native/ — never next to the v3 results.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TASKS } from './tasks.js';
@@ -140,6 +140,18 @@ export function episodeEnv(resolvedImage: string, env: NodeJS.ProcessEnv = proce
   return { ...env, BENCH_MC_IMAGE: resolvedImage };
 }
 
+export async function prepareRunOutput(out: string, image = worldCfg.image): Promise<string> {
+  createFreshRunOutput(out);
+  try {
+    return await World.requireImageDigest(image);
+  } catch (err) {
+    // Directory claim happened first to keep concurrent launchers fenced. A
+    // preflight failure has written no scored state, so release only our empty claim.
+    rmdirSync(out);
+    throw err;
+  }
+}
+
 async function runCmd(flags: Record<string, string>) {
   const arms = (flags.arms || 'decider').split(',').filter(Boolean);
   const tasks = (flags.tasks || Object.keys(TASKS).join(',')).split(',').filter(Boolean);
@@ -149,16 +161,7 @@ async function runCmd(flags: Record<string, string>) {
   if (!Number.isInteger(n) || n < 1) throw new Error(`--n must be a positive integer, got ${JSON.stringify(flags.n)}`);
   const runId = flags['run-id'] || `${new Date().toISOString().slice(0, 10)}-${arms.join('+')}`;
   const out = resolveOut(flags.out, runId);
-  createFreshRunOutput(out);
-  let resolvedImage: string;
-  try {
-    resolvedImage = await World.requireImageDigest();
-  } catch (err) {
-    // Directory claim happened first to keep concurrent launchers fenced. A
-    // preflight failure has written no scored state, so release only our empty claim.
-    rmSync(out, { recursive: false });
-    throw err;
-  }
+  const resolvedImage = await prepareRunOutput(out);
   const manifest = buildRunManifest({
     runId,
     arms,

@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DecisionModel, FunctionTool, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question, type StreamOptions, type Message } from '@strands-agents/sdk';
@@ -19,7 +19,7 @@ import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { countingTools } from '../src/bench/rig.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
-import { resolveOut, createFreshRunOutput, parseArgs, buildRunManifest, episodeEnv } from '../src/bench/cli.js';
+import { resolveOut, createFreshRunOutput, prepareRunOutput, parseArgs, buildRunManifest, episodeEnv } from '../src/bench/cli.js';
 import { dockerRunArgs, World } from '../src/bench/world.js';
 import { SelfHostedDecisionModel } from '../src/bench/decider.js';
 
@@ -539,6 +539,41 @@ test('results guard: new results only under bench-results/sdk-native; v3 results
   }
   assert.deepEqual(parseArgs(['run', '--arms', 'decider', '--n', '2', 'extra']), { cmd: 'run', flags: { arms: 'decider', n: '2' }, rest: ['extra'] });
   assert.throws(() => parseArgs(['run', '--arms', '--tasks', 'logs16']), /--arms needs a value/);
+});
+
+test('failed image preflight releases only its empty run-directory claim', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mcbench-preflight-'));
+  const out = join(root, 'sdk-native', 'retryable-run');
+  const original = World.imageDigest;
+  try {
+    World.imageDigest = async () => null;
+    await assert.rejects(() => prepareRunOutput(out, 'moving:latest'), /cannot resolve.*moving:latest.*pull or pin/);
+    assert.doesNotThrow(() => createFreshRunOutput(out), 'failed preflight must not consume the run id');
+  } finally {
+    World.imageDigest = original;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('failed image preflight never deletes unexpected scored state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mcbench-preflight-race-'));
+  const out = join(root, 'sdk-native', 'contended-run');
+  const original = World.imageDigest;
+  try {
+    World.imageDigest = async () => {
+      writeFileSync(join(out, 'foreign.json'), '{}\n');
+      return null;
+    };
+    await assert.rejects(() => prepareRunOutput(out, 'moving:latest'), (err: unknown) => {
+      assert.equal((err as NodeJS.ErrnoException).code, 'ENOTEMPTY');
+      return true;
+    });
+    assert.throws(() => createFreshRunOutput(out), /scored runs are append-immutable/,
+      'foreign state survives instead of being recursively deleted');
+  } finally {
+    World.imageDigest = original;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('run manifest records resolved world, budgets, policy profile and forced body configuration', async () => {

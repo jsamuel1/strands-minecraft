@@ -260,7 +260,7 @@
     "write_sign": "src/tools/world.ts:358"
   },
   "testFiles": 91,
-  "testCases": 913,
+  "testCases": 915,
   "loc": 23779,
   "srcFiles": 70,
   "rails": 7,
