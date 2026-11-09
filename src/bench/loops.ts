@@ -42,6 +42,7 @@ const budgetFor = (task: Task, steps: number, used: number, progress: number) =>
 
 export async function runPolicy(ep: Episode, model: DecisionModel, profile: ContextProfile, task: Task, body: Body, marks: Marks, clock: Clock = realClock, brainOpts: { wait?: (ms: number) => Promise<void> } = {}): Promise<void> {
   const brain = new PolicyBrain(model, body, task.goal, { profile, now: () => clock.now(), ...brainOpts });
+  let terminalFailure = false;
   ep.state_chars_budget = profile.stateChars;
   ep.history_steps_budget = profile.historySteps;
   ep.context_profile = { ...profile };
@@ -56,9 +57,9 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     // Bound every provider by the episode's remaining wall budget. Provider
     // defaults (or a hung custom fetch) must not let one decision overrun it.
     const d = await brain.step(AbortSignal.timeout(Math.max(1, Math.floor((task.maxWallS - used) * 1000))));
-    ep.steps += 1;
     ep.model_calls += 1;
     if (d.action === 'error' && d.error) {
+      terminalFailure = true;
       const name = d.error.split(':')[0];
       ep.provider_errors[name] = (ep.provider_errors[name] ?? 0) + 1;
       ep.error_samples[name] ??= d.error.slice(0, 300);
@@ -72,6 +73,8 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     ep.tokens_out += d.usage.outputTokens ?? 0;
     ep.actions.push(`${d.action}:${d.verdict}`);
     ep.decisions.push(decisionRow(d));
+    if (terminalFailure) break;
+    ep.steps += 1;
     const [done, progress] = task.check(await goalState(body, marks));
     ep.progress = progress;
     if (done) {
@@ -85,7 +88,7 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
   ep.latency_p50_ms = pct(lat, 50);
   ep.latency_p95_ms = pct(lat, 95);
   ep.server_latency_p50_ms = pct(srv, 50);
-  if (!ep.success) ep.cap_hit = ep.steps >= task.maxSteps ? 'steps' : 'wall';
+  if (!ep.success) ep.cap_hit = terminalFailure ? null : ep.steps >= task.maxSteps ? 'steps' : 'wall';
 }
 
 /** Per-model-call latency and errors from the SDK's own hooks: exact, never estimated. */

@@ -263,14 +263,17 @@ test('policy episode: each native decision receives the remaining wall budget as
   assert.equal(ep.cap_hit, 'steps');
 });
 
-test('policy episode: a decision-model error is data, not a crash; an off-alphabet answer runs nothing', async () => {
+test('policy episode: a terminal decision-model failure is recorded once without consuming an embodied step', async () => {
   class Broken extends DecisionModel { protected async _ask(): Promise<never> { const e = new Error('HTTP 503'); e.name = 'ModelThrottledError'; throw e; } }
   const b = new FakeBody();
   const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'wood_tools', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
   await runPolicy(ep, new Broken(), PROFILES.decider, { ...TASKS.wood_tools, maxSteps: 2 }, b, {}, fakeClock(), { wait: noWait });
-  assert.equal(ep.provider_errors.ModelThrottledError, 2);
-  assert.equal(ep.throttles, 2);
+  assert.equal(ep.steps, 0, 'provider failed before any embodied action');
+  assert.equal(ep.model_calls, 1, 'terminal provider failure does not retry until the action cap');
+  assert.equal(ep.provider_errors.ModelThrottledError, 1);
+  assert.equal(ep.throttles, 1);
   assert.equal(ep.latency_p50_ms, null, 'failed calls are not latency samples');
+  assert.equal(ep.cap_hit, null, 'provider failure is not a step or wall cap');
   assert.ok(!b.calls.some(([t]) => t === 'dig_vein'));
   const b2 = new FakeBody();
   const brain = new PolicyBrain(new ScriptedModel(() => 'teleport_home'), b2, 'g', { profile: PROFILES.decider, wait: noWait });
