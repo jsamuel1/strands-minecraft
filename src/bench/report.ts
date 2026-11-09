@@ -10,14 +10,14 @@
  * - fail counts goal-not-reached; infrastructure failures show as `+N infra`.
  */
 import { readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { SUITE, UNCAPPED_STEPS } from './tasks.js';
 
 type Row = Record<string, any> & { _run: string };
 
 export function loadRun(dir: string, label?: string): Row[] {
   return readFileSync(join(dir, 'episodes.jsonl'), 'utf8').split('\n').filter((l) => l.trim())
-    .map((l) => ({ ...JSON.parse(l), _run: label ?? basename(dir) }));
+    .map((l) => ({ ...JSON.parse(l), _run: label ?? basename(resolve(dir)) }));
 }
 
 const median = (xs: number[]) => {

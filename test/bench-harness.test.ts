@@ -287,6 +287,8 @@ test('report: median (min–max), budget stars, infra kept out of fail', () => {
   const t = table([row({}), row({ success: false, model_calls: 20, loop_s: 100, cap_hit: 'steps' }), row({ error: 'docker: boom' })]);
   assert.match(t, /\| decider \| r \| logs16 \| 3 \| 1 \| 1\+1 infra \| 12 \(4–20\*\) \| 1\.0 \(1\.0–1\.0\) \| 75 \(50–100\) \| 1\.3% \|/);
   assert.match(t, /Harness: sdk-native-v1@abc sdk 1\.24\.0/);
+  const sparse = table([{ _run: 'r', arm: 'decider', task: 'night', success: false, error: 'episode process exited SIGKILL without a row', harness: 'sdk-native-v1' }]);
+  assert.match(sparse, /\| decider \| r \| night \| 1 \| 0 \| 0\+1 infra \| – \| – \| – \| – \|/, 'a lost episode is shown, never dropped');
 });
 
 test('results guard: new results only under bench-results/sdk-native; v3 results are refused', () => {

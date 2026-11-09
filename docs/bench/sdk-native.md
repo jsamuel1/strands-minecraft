@@ -178,9 +178,14 @@ Knobs: `BENCH_MC_IMAGE`, `BENCH_MC_VERSION`, `BENCH_SEED`, `--port-base`
 
 ## Validation on this branch
 
-Smoke run 2026-11-09, CPU decider on this host (no paid infra), wood_tools,
-n = 1: success in 5 decisions (explore_north, fell_tree_0,
-craft_crafting_table, place_crafting_table, craft_wooden_pickaxe, each `done`
-by the world check), loop 48.4 s, decide 21.1 s, setup 34.1 s, 57 tool calls,
-0 deaths. Two of the five answers had `prob_sum` 0.9999. One episode is a
+Smoke run `bench-results/sdk-native/2026-11-09-smoke-decider-cpu/` (harness
+`9f3c26e`, CPU decider on this host, no paid infra), n = 1 per task:
+
+- wood_tools: success in 5 decisions (explore_north, fell_tree_0,
+  craft_crafting_table, place_crafting_table, craft_wooden_pickaxe, each `done`
+  by the world check); loop 47.7 s, decide 24.5 s, setup 33.8 s, 63 tool calls,
+  0 deaths.
+- logs16: success in 5 decisions; loop 108.9 s, decide 22.2 s.
+
+3 of the 10 answers had `prob_sum` 0.9999 or 1.0001. One episode per task is a
 smoke test, not a result.
