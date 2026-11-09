@@ -7,3 +7,4 @@ bot.log
 dist/
 mc-data/
 node_modules/
+.agents/

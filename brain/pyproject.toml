@@ -1,0 +1,52 @@
+[project]
+name = "strands-minecraft-brain"
+version = "0.1.0"
+description = "The Python brain for strands-minecraft: a strands-py agent (or a System One decision policy) driving the Node body sidecar over MCP."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    # strands-py with the experimental System One decisions API + TypeSafeDecisionModel
+    # (harness-sdk #4551 P0, PR #4559). Pinned to a commit, not a branch: the benchmark
+    # records this sha next to every episode.
+    "strands-agents[typesafe,openai] @ git+https://github.com/jsamuel1/sdk-python.git@7599ed078231d14577075550966b30a1b264cfff#subdirectory=strands-py",
+    "httpx>=0.28.1,<1.0.0",
+    "boto3>=1.35.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
+
+[project.scripts]
+strands-minecraft-brain = "mcbrain.cli:main"
+mcbench = "mcbench.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcbrain", "src/mcbench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# Prompts and option descriptions are prose; wrapping them mid-sentence helps nobody.
+# `ruff format` still owns code layout.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true

@@ -7,7 +7,7 @@ import { createModel, describeModel, resolveModelSpec } from './model.js';
 import { Session } from './session.js';
 import { JourneyRunner, journeyTools } from './journeys.js';
 import { Fleet, fleetTools, crewSnapshot } from './fleet.js';
-import { writePlace, recordDeath, deathContext, noteDamageSource } from './tools/memory.js';
+import { wireBodyRails } from './body-rails.js';
 import { Thinker } from './thinker.js';
 import { startSentinel } from './sentinel.js';
 import { startReflexes } from './reflexes.js';
@@ -18,13 +18,13 @@ import type { TelemetryExtras } from './web/tiny.js';
 import { startRecording, stopRecording, isRecording, speak } from './voice.js';
 import { RealtimeCall } from './realtime/realtime.js';
 import { createVoiceCall } from './voicecall.js';
-import { VoiceBridge, voiceBridgeTools } from './voicebridge.js';
+import { VoiceBridge, voiceBridgeTools, type Importance } from './voicebridge.js';
 import { NoteQueue } from './notes.js';
 import { classifyMessage, buildChatPrompt, systemNoteFor } from './chatrail.js';
 import { allTools } from './tools/index.js';
 import { checkMemory, memoryProbe, census, heapLimitMb } from './memcheck.js';
 import { cfg } from './config.js';
-import { carriedView, countCarried, readArmed } from './tools/helpers.js';
+import { carriedView, countCarried } from './tools/helpers.js';
 import { startLoopWatch } from './loopwatch.js';
 import { cameraWarmup } from './tools/vision.js';
 
@@ -416,7 +416,6 @@ const main = async () => {
   // through run() → session.ask(), so it forks past any turn in flight and
   // journeys yield to it like any live turn — pain preempts errands.
   const REFLEX_COOLDOWN_MS = Number(process.env.REFLEX_COOLDOWN_MS ?? 15_000);
-  const HUNGER_NOTE_AT = Number(process.env.HUNGER_NOTE_AT ?? 6);
   let lastReflex = 0;
   let reflexInFlight = false;
   // One gate for EVERY urgent-turn source (pain, primed creepers, drowning):
@@ -433,129 +432,16 @@ const main = async () => {
     web?.log('system', 'reflex', `${name}: ${prompt.slice(0, 160)}`);
     void run(prompt).finally(() => { reflexInFlight = false; });
   };
-  // Hunger is armed/disarmed with hysteresis, and the flag lives OUTSIDE
-  // onEachBot on purpose: a reconnect re-fires 'health' with the same low
-  // food, and a bot that re-announces its hunger after every signed-chat
-  // kick is a bot nobody wants.
-  let hungerArmed = true;
-  body.onEachBot((b) => {
-    b.on('entityHurt', (entity, source) => {
-      // `entity` can be undefined: mineflayer looks the id up in bot.entities
-      // and emits whatever it finds. Guard before the identity test — the same
-      // missing check killed a soak from the worker rail.
-      if (!entity || !b.entity || entity.id !== b.entity.id) return;
-      // Snapshot the scene NOW — by the time the model answers, the zombie
-      // has moved and the culprit may have despawned.
-      const me = b.entity.position;
-      // 1.20+ damage_event names the attacker directly; may be undefined
-      // (fall, fire, cactus) or missing entirely on older servers.
-      const attacker = source
-        ? (source.type === 'player' ? (source.username ?? 'a player') : (source.name ?? 'something'))
-        : undefined;
-      const threats = Object.values(b.entities)
-        .filter((e) => e.id !== b.entity.id && e.position && me.distanceTo(e.position) < 16
-          && (e.type === 'hostile' || (e.kind ?? '').toLowerCase().includes('hostile') || e.type === 'player'))
-        .sort((a, z) => me.distanceTo(a.position) - me.distanceTo(z.position))
-        .slice(0, 5)
-        .map((e) => `${e.name === 'player' ? (e.username ?? 'player') : (e.name ?? '?')} ${me.distanceTo(e.position).toFixed(1)}m away`);
-      // #35: mineflayer's 'death' event carries no cause, so the LAST thing that
-      // hit us is the only evidence a death site has about what kills there.
-      if (attacker) noteDamageSource(attacker);
-      console.log(`⚡ hurt${attacker ? ` by ${attacker}` : ''} — health ${(b.health ?? 0).toFixed(0)}/20${threats.length ? `, nearby: ${threats.join(', ')}` : ''}`);
-      reflexRun(
-        'hurt',
-        `(reflex) You just TOOK DAMAGE${attacker ? ` from ${attacker.toUpperCase()}` : ''} — health ${(b.health ?? 0).toFixed(0)}/20, food ${b.food ?? '?'}/20. ` +
-        (attacker
-          ? `The attacker is identified: ${attacker}. `
-          : threats.length
-            ? `Likely culprits nearby: ${threats.join('; ')}. `
-            : 'Nothing hostile in sight — could be fall, fire, lava, drowning or cactus. ') +
-        'Handle the danger NOW, before anything else: fight back (attack_entity until=\'dead\' arms your strongest weapon itself and fights the whole duel), or retreat/pillar up if outmatched or low, deal with the environment (get out of lava/water, extinguish), and eat if safe. ' +
-        'If a player is attacking you, one chat line to them is allowed.'
-      );
-    });
-    // Starvation is SILENT: food drains with no dedicated event, sprint dies
-    // below 7 drumsticks, and the first thing entityHurt hears about it is
-    // starvation DAMAGE at food 0 — the pain reflex firing at the moment
-    // eating can no longer prevent it. Catch the slide at the threshold
-    // (HUNGER_NOTE_AT, default 6) instead. A note, not a reflex fork: hunger is urgent-soon, not
-    // urgent-now — the note rail delivers immediately when idle (iter11's
-    // thinker trigger) and rides in front of the very next turn when busy.
-    // Once per hunger episode: re-arms only after food recovers to 14+, so a
-    // meal of one berry doesn't buy a second warning two ticks later.
-    b.on('health', () => {
-      if (process.env.REFLEX_DISABLED === 'true') return;
-      const food = b.food;
-      if (typeof food !== 'number') return; // pre-spawn tick
-      if (hungerArmed && food <= HUNGER_NOTE_AT) {
-        hungerArmed = false;
-        console.log(`🍗 hungry — food ${food}/20`);
-        queueNote(
-          `(system) You are HUNGRY — food ${food}/20. Below 7 you cannot sprint; at 0 you take starvation damage. ` +
-          `Eat NOW — call eat with no item and it picks the best fit itself. Nothing safe in the bag? It will say what risky food you carry; otherwise get food the fastest way in reach: ` +
-          `kill an animal and eat the drop, harvest a crop, or fish — and consider stocking a few meals while you're at it.`
-        );
-      } else if (!hungerArmed && food >= 14) {
-        hungerArmed = true; // properly fed again — the next slide is news
-      }
-    });
-    b.on('death', () => {
-      lastReflex = 0; // a fresh life deserves a fresh reflex
-      hungerArmed = true; // respawn resets food to 20; the next slide is a new episode
-      // Grab the position NOW — after respawn the entity stands at the spawn
-      // point and the death spot is gone. Persist it too: 'where did I die?'
-      // must survive a process restart, and a hired worker can run the
-      // corpse-run while the primary keeps working.
-      const p = b.entity?.position;
-      console.log(`💀 died${p ? ` at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}` : ''}`);
-      let where = 'position unknown — it happened before spawn finished';
-      // #35: soak36 died three times at (1,67,30) and the note was identical
-      // each time, because 'last_death' is a NAME and writePlace replaces a
-      // name — every death erased the proof the last one happened here. The
-      // count comes back out of the store, not out of this handler.
-      const site = p
-        ? recordDeath(p, {
-            dimension: b.game?.dimension,
-            // #35's remedy half: the conditions, so a cluster can name what its
-            // deaths SHARE (no armour, after dark, the same job) instead of only
-            // counting them.
-            ...deathContext(b, { doing: journeys.running?.goal }),
-          })
-        : undefined;
-      // A fact that only ever reaches the mind cannot be verified by anyone
-      // else. soak38 detected three repeat graves and the log said nothing about
-      // any of them, so the rail was indistinguishable from the silent one it
-      // replaced — the same auditability lesson as c90b087.
-      if (site?.repeat) console.log(`💀 [grave] ${site.fact}`);
-      if (p) {
-        const place = writePlace('last_death', p, `died here (${b.game?.dimension ?? 'unknown dimension'})`, b.username ?? 'bot');
-        where = `at (${place.x}, ${place.y}, ${place.z}) in ${b.game?.dimension ?? '?'} — saved as waypoint 'last_death'`;
-      }
-      // Same rule as onRevive: never push into a possibly-mid-turn history.
-      recordTurnEvent('died');
-      // #46: after a respawn the hands are EMPTY by definition — saying so with
-      // the bag's contents is the difference between "think about what killed
-      // you" and knowing you are about to walk back out unarmed.
-      const armed = readArmed(b);
-      // #35: on a REPEAT grave the stock advice contradicts the fact printed one
-      // sentence later. "Run back (or hire a worker for the corpse-run)" is what
-      // sent Rescue 0-for-2 into the airspace that had already killed the bot,
-      // while the site fact says the earlier piles have despawned. So the advice
-      // is not suppressed by a policy the mind cannot see — it is replaced by the
-      // arithmetic: only THIS life's drops still exist, and they are lying inside
-      // the thing that has killed us N times.
-      const corpseAdvice = site?.repeat
-        ? `Only THIS life's drops are still there — the ${site.repeat.count - 1} earlier pile(s) at this spot are gone — and they are lying inside whatever has killed you ${site.repeat.count} times, so a corpse-run here is a re-entry, not an errand.`
-        : 'Run back (or hire a worker for the corpse-run) — and think about what killed you before walking into it again.';
-      queueNote(`(system) You DIED and respawned. ${armed.line} Your items are on the ground ${where} and despawn in ~5 minutes. ${corpseAdvice}${site?.fact ? ` ${site.fact}` : ''}`);
-      // Spoken to a human, so it must not promise a decision the mind has not
-      // made: "heading back for them" was a plan invented by the death handler,
-      // and soak24 shows what actually followed a death — four more bare-fisted
-      // bursts against the same phantoms, nowhere near the drop pile. Say the
-      // facts (where, the clock, and that the hands are empty now) and let the
-      // mind announce its own plan.
-      voiceBridge.push('sentinel', `I just DIED ${where}. My gear is in that pile and despawns in about five minutes, and I respawned ${armed.armed ? `holding a ${armed.held}` : 'empty-handed'}.${site?.repeat ? ` That is death number ${site.repeat.count} within ${site.repeat.radius} blocks of the same spot.` : ''}`, 2);
-    });
+  // Pain, hunger and death — one shared copy (src/body-rails.ts), because the
+  // Python brain drives this same body through the MCP sidecar and needs the
+  // same facts. Policy (what a turn costs) stays here.
+  wireBodyRails(body, {
+    note: queueNote,
+    reflex: reflexRun,
+    turnEvent: recordTurnEvent,
+    voice: (source, text, importance) => voiceBridge.push(source, text, importance as Importance),
+    doing: () => journeys.running?.goal,
+    onDeath: () => { lastReflex = 0; },
   });
 
   // Rail 7: the sentinel — event-driven senses (whitelisted hearing, hostile

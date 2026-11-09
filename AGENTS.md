@@ -92,6 +92,26 @@ first; it is the spine.
 
 ---
 
+## The Python brain + body sidecar
+
+`src/sidecar.ts` runs a body WITHOUT a TS brain: mineflayer, body, legs,
+reflexes, sentinel, chatrail and the pain/hunger/death rails (`src/body-rails.ts`,
+shared with `index.ts`) stay in Node. Each body is exposed on one loopback port
+(`SIDECAR_PORT`, 3010) as `POST /mcp/<body>` (stateless MCP, the tools' zod-
+generated schemas), `GET /events/<body>` (seq'd ring of notes, reflex asks,
+verified player chat, revive, gave-up; peer bots are logged and never become
+`chat`), `GET /state/<body>` (digest + Δ snapshot + counters) and
+`POST /busy/<body>`. `npm run sidecar`.
+
+`brain/` is the Python brain on strands-py (see `brain/README.md`): session
+fork/fold, NoteQueue, journeys, thinker, config registry, and a model factory
+that also runs System One decision models (Jev, Kev, CLM) as a policy that picks
+from code-built legal macro-actions. `brain/src/mcbench` is the benchmark.
+Run `cd brain && uv run pytest && uv run ruff check src tests && uv run mypy src`
+alongside `npm test` and `npm run typecheck`.
+
+---
+
 ## Conventions & hard-won rules (don't relearn these the expensive way)
 
 - **`src/config.ts` is the ONLY home for tunables.** See `HARDCODING.md` for

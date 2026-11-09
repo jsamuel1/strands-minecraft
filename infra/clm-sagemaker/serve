@@ -1,0 +1,26 @@
+#!/bin/bash
+# SageMaker runs `docker run <image> serve`, so the argument is ignored.
+set -euo pipefail
+M=${SM_MODEL_DIR:-/opt/ml/model}
+MAXLEN=${CLM_EMB_MAX_TOKENS:-2048}
+
+echo "[serve] vLLM Qwen3-8B pooling from $M/qwen3-8b (max-model-len $MAXLEN, util ${VLLM_GPU_UTIL})"
+python3 -m vllm.entrypoints.openai.api_server \
+  --model "$M/qwen3-8b" --served-model-name qwen3-8b \
+  --runner pooling --enable-prefix-caching \
+  --max-model-len "$MAXLEN" --gpu-memory-utilization "$VLLM_GPU_UTIL" \
+  --max-num-seqs 32 --host 127.0.0.1 --port 8090 &
+VLLM=$!
+
+for i in $(seq 1 600); do
+  python3 -c 'import urllib.request as u; u.urlopen("http://127.0.0.1:8090/v1/models", timeout=2)' 2>/dev/null && break
+  kill -0 $VLLM 2>/dev/null || { echo "[serve] vLLM exited"; exit 1; }
+  sleep 1
+done
+echo "[serve] vLLM up after ${i}s"
+
+clm-serve --host 127.0.0.1 --port 8700 --ckpt "$M/CLM_v0.1-8B.pt" \
+  --max-tokens "$MAXLEN" --no-download --no-ui &
+CLM=$!
+
+exec python3 -m uvicorn --app-dir /opt/clm gateway:app --host 0.0.0.0 --port 8080 --workers 1 --log-level warning

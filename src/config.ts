@@ -321,6 +321,27 @@ export const cfg = {
     causeFreshMs: 10_000,
   },
 
+  /**
+   * The body sidecar (src/sidecar.ts) — the Node process a non-Node brain
+   * drives over MCP + an event stream.
+   */
+  sidecar: {
+    /** SIDECAR_PORT — 3010: clear of the dashboard (3008) and the viewer (3007). */
+    port: num('SIDECAR_PORT', 3010),
+    /** SIDECAR_HOST — loopback: the tools move a body; nobody off-box should hold that. */
+    host: str('SIDECAR_HOST', '127.0.0.1'),
+    /**
+     * SIDECAR_EVENT_CAP — 500 events per body. The ring is what keeps a brain
+     * that stopped polling from becoming issue #44; seq numbers survive
+     * eviction, so a lagging poller is told how many it missed.
+     */
+    eventCap: num('SIDECAR_EVENT_CAP', 500),
+    /** SIDECAR_MAX_POLL_MS — 25s long-poll ceiling: under common HTTP idle timeouts. */
+    maxPollMs: num('SIDECAR_MAX_POLL_MS', 25_000),
+    /** SIDECAR_BLOCK_PROBE_MAX — 256 positions per /blocks probe: build_blueprint's own plan cap. */
+    blockProbeMax: num('SIDECAR_BLOCK_PROBE_MAX', 256),
+  },
+
   memcheck: {
     /** MEM_PROBE_MS — 30s heap+collection sample. Slow enough to be free for a
      *  whole night, fast enough that a 51-minute leak (issue #44) shows a slope
