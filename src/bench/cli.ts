@@ -15,7 +15,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TASKS } from './tasks.js';
 import { createDecisionModel, resolveDecisionSpec } from './decider.js';
@@ -57,6 +57,10 @@ export function resolveOut(out: string | undefined, runId: string, cwd = process
 
 /** A run owns the directory exclusively once any path exists there. */
 export function createFreshRunOutput(dir: string): void {
+  // Parents are scaffolding, not scored state. Create them first, then claim the
+  // final run directory with one non-recursive mkdir so concurrent launchers
+  // cannot share or overwrite a run.
+  mkdirSync(dirname(dir), { recursive: true });
   try {
     mkdirSync(dir, { recursive: false });
   } catch (err) {

@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DecisionModel, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question } from '@strands-agents/sdk';
@@ -353,14 +353,16 @@ test('results guard: new results only under bench-results/sdk-native; v3 results
   assert.throws(() => resolveOut('/repo/bench-results', 'x', '/repo'), /immutable/);
   assert.throws(() => resolveOut('bench-results/RESULTS-v3.md', 'x', '/repo'), /immutable/);
   assert.doesNotThrow(() => resolveOut('/tmp/scratch-run', 'x', '/repo'));
-  const existing = mkdtempSync(join(tmpdir(), 'mcbench-existing-'));
+  const root = mkdtempSync(join(tmpdir(), 'mcbench-output-'));
+  const existing = join(root, 'existing');
+  mkdirSync(existing);
   try {
     assert.throws(() => createFreshRunOutput(existing), /scored runs are append-immutable/);
-    const fresh = join(existing, 'new-run');
-    assert.doesNotThrow(() => createFreshRunOutput(fresh));
+    const fresh = join(root, 'missing-parent', 'new-run');
+    assert.doesNotThrow(() => createFreshRunOutput(fresh), 'a clean checkout has no sdk-native parent yet');
     assert.throws(() => createFreshRunOutput(fresh), /scored runs are append-immutable/);
   } finally {
-    rmSync(existing, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
   assert.deepEqual(parseArgs(['run', '--arms', 'decider', '--n', '2', 'extra']), { cmd: 'run', flags: { arms: 'decider', n: '2' }, rest: ['extra'] });
   assert.throws(() => parseArgs(['run', '--arms', '--tasks', 'logs16']), /--arms needs a value/);
