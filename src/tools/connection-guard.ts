@@ -28,6 +28,7 @@
  * disconnect is not worth a subscription lifecycle.
  */
 
+import type { Tool, ToolResultBlock, ToolStreamGenerator } from '@strands-agents/sdk';
 /** What the model is told when its action outlived the socket. */
 export function connectionLostMessage(o: { tool: string; detail?: string }): string {
   return (
@@ -76,12 +77,10 @@ export async function guardEpoch<T>(
   }
 }
 
-/** The shape of a mounted Strands tool, as far as this file cares. */
-interface MountedTool {
-  toolSpec?: { name?: string };
+/** Runtime-tolerant view: production entries are SDK Tools; tests also cover legacy invoke-only objects. */
+type MountedTool = Partial<Pick<Tool, 'toolSpec' | 'stream'>> & {
   invoke?: (...args: unknown[]) => unknown;
-  stream?: (...args: unknown[]) => AsyncGenerator<unknown, unknown, unknown>;
-}
+};
 
 /**
  * Guard one SDK tool generator. Each `next()` can await body I/O, so each one
@@ -89,9 +88,9 @@ interface MountedTool {
  * an async generator paused on the dead emitter cannot process it yet.
  */
 function guardedStream(
-  source: AsyncGenerator<unknown, unknown, unknown>,
+  source: ToolStreamGenerator,
   o: { tool: string; epoch: () => number; pollMs?: number; detail?: () => string | undefined },
-): AsyncGenerator<unknown, unknown, unknown> {
+): ToolStreamGenerator {
   const started = o.epoch();
   return (async function* () {
     let done = false;
@@ -108,7 +107,7 @@ function guardedStream(
         yield next.value;
       }
     } finally {
-      if (!done) void source.return(undefined).catch(() => undefined);
+      if (!done) void source.return(undefined as unknown as ToolResultBlock).catch(() => undefined);
     }
   })();
 }
@@ -141,8 +140,8 @@ export function guardTools<T>(tools: T[], o: { epoch: () => number; pollMs?: num
             });
         }
         if (prop === 'stream' && typeof obj.stream === 'function') {
-          return (...args: unknown[]) => guardedStream(
-            (obj.stream as (...a: unknown[]) => AsyncGenerator<unknown, unknown, unknown>).apply(obj, args),
+          return (...args: Parameters<Tool['stream']>) => guardedStream(
+            obj.stream!.apply(obj, args),
             { tool: name, epoch: o.epoch, pollMs: o.pollMs, detail: o.detail },
           );
         }

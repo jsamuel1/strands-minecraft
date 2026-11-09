@@ -8,7 +8,16 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FunctionTool, type JSONValue, type ToolContext } from '@strands-agents/sdk';
+import {
+  Agent,
+  FunctionTool,
+  Model,
+  type JSONValue,
+  type Message,
+  type StreamOptions,
+  type Tool,
+  type ToolContext,
+} from '@strands-agents/sdk';
 import { guardEpoch, guardTools, connectionLostMessage } from '../src/tools/connection-guard.js';
 
 const POLL = 10; // tests do not need a quarter-second of patience
@@ -114,6 +123,29 @@ async function finish<T>(stream: AsyncGenerator<unknown, T, unknown>): Promise<T
   return next.value;
 }
 
+class OneToolModel extends Model {
+  private calls = 0;
+  constructor(private readonly name: string) { super(); }
+  updateConfig() {}
+  getConfig() { return { modelId: 'one-tool' }; }
+  async *stream(_messages: Message[], _options?: StreamOptions) {
+    this.calls += 1;
+    yield { type: 'modelMessageStartEvent' as const, role: 'assistant' as const };
+    if (this.calls === 1) {
+      yield { type: 'modelContentBlockStartEvent' as const, start: { type: 'toolUseStart' as const, name: this.name, toolUseId: `${this.name}-1` } };
+      yield { type: 'modelContentBlockDeltaEvent' as const, delta: { type: 'toolUseInputDelta' as const, input: '{}' } };
+      yield { type: 'modelContentBlockStopEvent' as const };
+      yield { type: 'modelMessageStopEvent' as const, stopReason: 'toolUse' as const };
+    } else {
+      yield { type: 'modelContentBlockStartEvent' as const };
+      yield { type: 'modelContentBlockDeltaEvent' as const, delta: { type: 'textDelta' as const, text: 'done' } };
+      yield { type: 'modelContentBlockStopEvent' as const };
+      yield { type: 'modelMessageStopEvent' as const, stopReason: 'endTurn' as const };
+    }
+    yield { type: 'modelMetadataEvent' as const, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } };
+  }
+}
+
 test('guardTools: SDK FunctionTool stream preserves events, context, and final result', async () => {
   let epoch = 4;
   let seen: ToolContext | undefined;
@@ -195,6 +227,29 @@ test('guardTools: SDK stream waiting on a dead socket rejects after reconnect', 
     () => finish(wrapped.stream(toolContext('container_transact'))),
     /connection dropped while 'container_transact' was in flight.*result is UNKNOWN.*StrandsBot/s,
   );
+});
+
+test('guardTools: real SDK Agent executes the guarded stream path after reconnect', async () => {
+  let epoch = 1;
+  let invoked = 0;
+  const real = new FunctionTool({
+    name: 'container_transact', description: 'open', inputSchema: { type: 'object' },
+    callback: async () => {
+      invoked += 1;
+      return new Promise(() => {});
+    },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const agent = new Agent({ model: new OneToolModel(real.name), tools: [wrapped as Tool], printer: false });
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  const result = await agent.invoke('open it', { limits: { turns: 2 } });
+  assert.equal(result.stopReason, 'endTurn');
+  assert.equal(invoked, 1);
+  const errors = agent.messages.flatMap((message) => message.content)
+    .filter((block) => block.type === 'toolResultBlock')
+    .filter((block) => block.status === 'error');
+  assert.equal(errors.length, 1, 'Agent ToolExecutor consumed guarded Tool.stream and surfaced one error result');
+  assert.match(JSON.stringify(errors[0]), /connection dropped while 'container_transact' was in flight/);
 });
 
 test('guardTools: skip leaves a tool that is meant to span a reconnect alone', async () => {
