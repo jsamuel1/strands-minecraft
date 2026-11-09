@@ -213,7 +213,12 @@ export class SelfHostedDecisionModel extends DecisionModel {
     } catch (err) {
       throw new ModelError(`${this.o.providerName} request failed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
     }
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      throw new ModelError(`${this.o.providerName} response body failed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
     const latencyMs = Math.round(performance.now() - t0);
     if (!res.ok) {
       const msg = `${this.o.providerName} HTTP ${res.status}: ${text.slice(0, 300)}`;

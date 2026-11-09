@@ -43,7 +43,7 @@ export interface Episode {
   actions: string[];
   decisions: Array<Record<string, unknown>>;
   error: string | null;
-  /** "steps" | "wall" | null (succeeded, or infra error). */
+  /** "steps" | "wall" | null (succeeded, infrastructure error, or terminal provider failure). */
   cap_hit: 'steps' | 'wall' | null;
   loop_s: number | null;
   decide_s: number | null;

@@ -111,6 +111,7 @@ export const AGENT_FIRST_PROMPT = (goal: string) =>
 
 export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body & { digest?: () => string }, marks: Marks, clock: Clock = realClock): Promise<void> {
   const stats = instrumentAgent(agent);
+  let terminalFailure = false;
   const t0 = clock.now();
   for (let i = 0; i < task.maxSteps; i++) {
     const used = clock.now() - t0;
@@ -118,6 +119,7 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
     const prompt = i === 0 ? AGENT_FIRST_PROMPT(task.goal) : `Status:\n${body.digest?.() ?? ''}\nContinue toward the goal: ${task.goal}`;
     const remainingMs = Math.max(1, Math.floor((task.maxWallS - used) * 1000));
     let cancelled = false;
+    let invocationFailed = false;
     body.setBusy(true);
     try {
       const r = await agent.invoke(prompt, { limits: { turns: 4 }, cancelSignal: AbortSignal.timeout(remainingMs) });
@@ -130,6 +132,8 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
       }
       cancelled = r.stopReason === 'cancelled';
     } catch (err) {
+      invocationFailed = true;
+      terminalFailure = true;
       const n = err instanceof Error ? err.name : 'Error';
       ep.error_samples[n] ??= (err instanceof Error ? err.message : String(err)).slice(0, 300);
     } finally {
@@ -143,10 +147,12 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
       ep.time_to_goal_s = +(clock.now() - t0).toFixed(1);
       break;
     }
-    if (cancelled || clock.now() - t0 >= task.maxWallS) break;
+    if (cancelled || invocationFailed || clock.now() - t0 >= task.maxWallS) break;
   }
   ep.loop_s = +(clock.now() - t0).toFixed(1);
-  if (!ep.success) ep.cap_hit = ep.steps >= task.maxSteps ? 'steps' : 'wall';
+  // A model/provider failure is neither a step nor wall-cap hit. The error
+  // sample/provider counter carries that terminal cause.
+  if (!ep.success) ep.cap_hit = terminalFailure ? null : ep.steps >= task.maxSteps ? 'steps' : 'wall';
   ep.model_calls = stats.latencies.length;
   ep.call_latencies_ms = stats.latencies;
   ep.decide_s = +(stats.latencies.reduce((a, b) => a + b, 0) / 1000).toFixed(2);

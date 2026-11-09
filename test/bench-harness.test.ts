@@ -5,13 +5,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DecisionModel, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question } from '@strands-agents/sdk';
+import { DecisionModel, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question } from '@strands-agents/sdk';
 import type { Body, BodyEvent, BodySnapshot, ToolOutcome, Vec } from '../src/bench/body.js';
 import { toOutcome } from '../src/bench/body.js';
 import { candidates, decisionState, dropEmpty, buildQuestions, PolicyBrain, PROFILES, pyJson, stepOutcome, cleanOutcome, formatEvents, boxPlan, type Observation, type Step } from '../src/bench/policy.js';
 import { checkAction, toolReason, type Snapshot } from '../src/bench/verify.js';
 import { SUITE, TASKS, UNCAPPED_STEPS, applyMarks } from '../src/bench/tasks.js';
-import { runPolicy, type Clock } from '../src/bench/loops.js';
+import { runPolicy, runAgent, buildAgent, type Clock } from '../src/bench/loops.js';
 import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
@@ -275,6 +275,22 @@ test('policy episode: a decision-model error is data, not a crash; an off-alphab
   const d = await brain.step();
   assert.equal(d.verdict, 'no_effect');
   assert.match(d.error!, /not one of the offered ids/);
+});
+
+test('agent episode: a terminal model failure is recorded once and stops before burning the step budget', async () => {
+  class BrokenModel extends Model {
+    updateConfig() {}
+    getConfig() { return { modelId: 'broken' }; }
+    async *stream(): AsyncIterable<never> { throw new ModelError('provider unavailable'); }
+  }
+  const b = new FakeBody();
+  const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'broken', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runAgent(ep, buildAgent(new BrokenModel(), [], 'test'), { ...TASKS.logs16, maxSteps: 4 }, b, {}, fakeClock());
+  assert.equal(ep.steps, 1);
+  assert.equal(ep.model_calls, 1);
+  assert.equal(ep.provider_errors.ModelError, 1);
+  assert.match(ep.error_samples.ModelError, /provider unavailable/);
+  assert.equal(ep.cap_hit, null, 'terminal invocation failure is not mislabelled as budget exhaustion');
 });
 
 // ── tasks, marks, budgets, report, guards ────────────────────────────────────

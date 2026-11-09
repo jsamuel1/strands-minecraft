@@ -89,12 +89,17 @@ test('parser: Uncertain below the confidence floor unless uncertainty is false (
   assert.equal(r2.answers.a, 'x');
 });
 
-test('HTTP errors map to the SDK error classes; a body over the limit never leaves', async () => {
+test('HTTP and response-body errors map to SDK model errors; a body over the limit never leaves', async () => {
   for (const [status, cls] of [[429, ModelThrottledError], [503, ModelThrottledError], [413, ContextWindowOverflowError], [422, ModelError]] as const) {
     const s = fakeServer(() => ({ status, text: 'nope' }));
     const m = new SelfHostedDecisionModel({ baseUrl: 'http://h', fetch: s.fetch });
     await assert.rejects(m.ask('s', { q: { question: 'q', choices: 'boolean' } }), cls);
   }
+  const brokenBody = (async () => ({ ok: true, status: 200, text: async () => { throw new TypeError('socket closed'); } })) as unknown as typeof globalThis.fetch;
+  await assert.rejects(
+    new SelfHostedDecisionModel({ baseUrl: 'http://h', fetch: brokenBody }).ask('s', { q: { question: 'q', choices: 'boolean' } }),
+    (err: unknown) => err instanceof ModelError && /response body failed: socket closed/.test(err.message),
+  );
   const s = fakeServer(() => ({ json: {} }));
   const m = new SelfHostedDecisionModel({ baseUrl: 'http://h', fetch: s.fetch, maxBodyBytes: 100 });
   await assert.rejects(m.ask('x'.repeat(200), { q: { question: 'q', choices: 'boolean' } }), ContextWindowOverflowError);

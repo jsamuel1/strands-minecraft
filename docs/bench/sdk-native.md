@@ -137,8 +137,9 @@ four-cycle limit as v3. These are different interfaces, so the state-format
 budgets are comparable within policy arms rather than identical to agent chat
 history. Every decision/turn gets an abort signal for the remaining episode
 wall budget. Success is `task.check()` over body state after each step.
-Infrastructure failures (`error`) are counted apart from model failures, and an
-episode process that dies without writing a row gets an infra row.
+Infrastructure failures (`error`) remain separate in reports. Terminal provider
+failures are identifiable through `provider_errors` with no `cap_hit`, rather
+than being mislabelled as step/wall exhaustion. An episode process that dies without writing a row gets an infra row.
 
 What "reproducible reset" covers: every episode starts from a new container
 with the same image tag, game version and seed, a world on tmpfs, a fresh
