@@ -14,7 +14,16 @@
  * question to pair with; writing one in would fake the history.
  */
 import type { Bot } from 'mineflayer';
-import type { Message } from '@strands-agents/sdk';
+import { randomUUID } from 'node:crypto';
+import type {
+  InvokableTool,
+  JSONValue,
+  LocalAgent,
+  Message,
+  Tool,
+  ToolContext,
+  ToolResultBlock,
+} from '@strands-agents/sdk';
 import { textMessage } from './history-doctor.js';
 import { RealtimeCall, type RealtimeEvent } from './realtime/realtime.js';
 import type { TransportFactories } from './realtime/transport.js';
@@ -29,19 +38,62 @@ import type { TransportFactories } from './realtime/transport.js';
  */
 export interface AgentLike { messages: Message[] }
 
+/** Runtime-tolerant view: production entries are SDK Tools; older callers may pass invoke-only tools. */
+type VoiceTool = Partial<Pick<Tool, 'stream' | 'toolSpec'>> & Partial<Pick<InvokableTool<unknown, unknown>, 'invoke'>>;
+
+const blockValue = (block: { type?: string; text?: string; json?: JSONValue }): unknown => {
+  if (block.type === 'textBlock') return block.text ?? '';
+  if (block.type === 'jsonBlock') return block.json;
+  return block;
+};
+
+/** Turn an SDK ToolResultBlock into the direct executor's raw-value shape. */
+function voiceToolResult(result: ToolResultBlock): unknown {
+  const values = result.content.map(blockValue);
+  const value = values.length === 1 ? values[0] : values;
+  if (result.status === 'error') {
+    const detail = values.map((v) => typeof v === 'string' ? v : JSON.stringify(v)).join(' | ');
+    throw result.error ?? new Error(detail.replace(/^Error:\s*/, '') || 'tool failed');
+  }
+  return value;
+}
+
+/** Execute a stream-only SDK Tool to its terminal result, preserving its ToolContext. */
+async function invokeVoiceTool(t: VoiceTool, name: string, args: unknown, context?: Partial<ToolContext>): Promise<unknown> {
+  const toolContext = context?.toolUse && context.agent && context.invocationState && context.cancelSignal && context.interrupt
+    ? context as ToolContext
+    : {
+      toolUse: { name, toolUseId: context?.toolUse?.toolUseId ?? `voice-${randomUUID()}`, input: args as JSONValue },
+      agent: context?.agent ?? ({} as LocalAgent),
+      invocationState: context?.invocationState ?? {},
+      cancelSignal: context?.cancelSignal ?? new AbortController().signal,
+      ...(context?.invocationContext ? { invocationContext: context.invocationContext } : {}),
+      interrupt: context?.interrupt ?? (() => { throw new Error(`tool ${name} requested an interrupt outside an SDK Agent turn`); }),
+    } as ToolContext;
+  if (typeof t.invoke === 'function') return t.invoke(args, toolContext);
+  if (typeof t.stream !== 'function') throw new Error(`tool ${name} has neither invoke nor stream`);
+  const stream = t.stream(toolContext);
+  let next = await stream.next();
+  while (!next.done) next = await stream.next();
+  return voiceToolResult(next.value);
+}
+
 /**
  * The tool executor both rails share. Voice can't look at images: catch
  * capture_view's ImageBlock before it becomes 200KB of base64 read into the
  * model's spoken context. Errors come back as prose — a thrown tool that
  * answers nothing leaves a call hanging in silence forever.
  */
-export function makeExecuteTool(tools: unknown[], touch?: () => void) {
-  return async (name: string, args: unknown): Promise<string> => {
+export function makeExecuteTool(tools: unknown[], touch?: () => void, context?: Partial<ToolContext>) {
+  return async (name: string, args: unknown, callContext?: Partial<ToolContext>): Promise<string> => {
     touch?.();
-    const t = tools.find((x) => (x as { toolSpec?: { name?: string } }).toolSpec?.name === name);
+    const t = tools.find((x) => (x as { toolSpec?: { name?: string } }).toolSpec?.name === name) as VoiceTool | undefined;
     if (!t) return `error: no tool named ${name}`;
     try {
-      const r = await (t as { invoke: (a: unknown) => Promise<unknown> }).invoke(args);
+      const executionContext = callContext
+        ? (callContext.agent ? callContext : { ...context, ...callContext, agent: context?.agent })
+        : context;
+      const r = await invokeVoiceTool(t, name, args, executionContext);
       if (r && typeof r === 'object' && (r as { type?: string }).type === 'imageBlock') {
         return 'Screenshot captured, but I cannot inspect images mid-call — ask me over text chat to describe what I see.';
       }
@@ -105,7 +157,8 @@ export function createVoiceCall(deps: VoiceCallDeps): RealtimeCall {
   return new RealtimeCall({
     apiKey: deps.apiKey,
     tools: deps.tools,
-    executeTool: makeExecuteTool(deps.tools, deps.touch),
+    agent: deps.agent,
+    executeTool: makeExecuteTool(deps.tools, deps.touch, { agent: deps.agent as unknown as LocalAgent }),
     context:
       `You are ${deps.bot.username} in a Minecraft world at ${deps.bot.entity?.position}. ` +
       `Players online: ${Object.keys(deps.bot.players ?? {}).filter((n) => n !== deps.bot.username).join(', ') || 'none'}.`,

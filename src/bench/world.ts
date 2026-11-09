@@ -37,6 +37,13 @@ export class World {
     return stdout.trim() || null;
   }
 
+  /** Resolve the local image tag to immutable provenance or refuse the run. */
+  static async requireImageDigest(image = worldCfg.image): Promise<string> {
+    const digest = await World.imageDigest(image);
+    if (!digest) throw new Error(`cannot resolve BENCH_MC_IMAGE ${JSON.stringify(image)} to a local digest; pull or pin the image before starting a scored run`);
+    return digest;
+  }
+
   async start(timeoutS = 240): Promise<this> {
     await run('docker', dockerRunArgs(this.name, this.port, this.rconPort));
     const deadline = Date.now() + timeoutS * 1000;

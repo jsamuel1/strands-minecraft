@@ -48,6 +48,7 @@
  * said, because a call that leaves no trace in the transcript is a toy.
  */
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import {
   openMic, openSpeaker, detectBackend, missingAudioHint, frameLevel, BYTES_PER_MS,
   type Mic, type Speaker, type AudioBackend,
@@ -302,7 +303,7 @@ export interface RealtimeCallOptions {
   /** The Strands tools this process has mounted — the voice agent gets them all. */
   tools?: any[]
   /** Runs a tool by name. Defaults to invoking the matching object in `tools`. */
-  executeTool?: (name: string, args: any) => Promise<string> | string
+  executeTool?: (name: string, args: any, context?: any) => Promise<string> | string
   /** The Strands Agent the tools belong to. Only needed when `executeTool` is
    *  absent: the vended tools (bash, fileEditor, notebook) demand a ToolContext
    *  carrying a real agent and throw without one, so a call given `tools` but
@@ -726,7 +727,15 @@ export class RealtimeCall {
     let output: string
     try {
       if (this.opts.executeTool) {
-        output = String(await this.opts.executeTool(name, args))
+        const cancelSignal = new AbortController().signal
+        const context = {
+          toolUse: { toolUseId: id || `voice-${randomUUID()}`, name, input: args },
+          agent: this.opts.agent,
+          invocationState: {},
+          cancelSignal,
+          interrupt: () => { throw new Error(`tool ${name} requested an interrupt outside an SDK Agent turn`) },
+        }
+        output = String(await this.opts.executeTool(name, args, context))
       } else {
         const t = this.toolMap.get(name)
         if (!t) throw new Error(`no tool named ${name} on this machine`)
@@ -734,8 +743,20 @@ export class RealtimeCall {
         // their second argument and refuse without it ("Tool context is required
         // for bash operations"), which this method would then hand to the model
         // as spoken prose — a wiring failure that sounds like a polite apology.
-        const ctx = { toolUse: { toolUseId: id || `voice-${Date.now().toString(36)}`, name, input: args }, agent: this.opts.agent, invocationState: {} }
-        const r = await t.invoke(args, ctx as any)
+        const ctx = { toolUse: { toolUseId: id || `voice-${randomUUID()}`, name, input: args }, agent: this.opts.agent, invocationState: {}, cancelSignal: new AbortController().signal, interrupt: () => { throw new Error(`tool ${name} requested an interrupt outside an SDK Agent turn`) } }
+        let r: any
+        if (typeof t.invoke === 'function') {
+          r = await t.invoke(args, ctx as any)
+        } else if (typeof t.stream === 'function') {
+          const stream = t.stream(ctx as any)
+          let next = await stream.next()
+          while (!next.done) next = await stream.next()
+          if (next.value?.status === 'error') throw next.value.error ?? new Error(JSON.stringify(next.value))
+          const values = (next.value?.content ?? []).map((block: any) => block?.type === 'textBlock' ? block.text : block?.type === 'jsonBlock' ? block.json : block)
+          r = values.length === 1 ? values[0] : values
+        } else {
+          throw new Error(`tool ${name} has neither invoke nor stream`)
+        }
         output = typeof r === 'string' ? r : JSON.stringify(r ?? {})
       }
     } catch (e: any) {

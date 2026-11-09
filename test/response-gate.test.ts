@@ -13,6 +13,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RealtimeCall, type SocketLike } from '../src/realtime/realtime.js';
+import { makeExecuteTool } from '../src/voicecall.js';
+import { TextBlock, ToolResultBlock, type ToolContext } from '@strands-agents/sdk';
 
 function fakeSocket(sent: unknown[]): SocketLike & { deliver: (msg: unknown) => void } {
   const ws: any = {
@@ -83,6 +85,81 @@ test('several briefings mid-answer collapse into ONE deferred ask', async () => 
 
   ws.deliver({ type: 'response.done' });
   assert.equal(creates(sent), 1, 'three items, one answer — not three replies');
+  call.stop();
+});
+
+test('realtime call executes a stream-only SDK tool and sends its terminal result', async () => {
+  const sent: unknown[] = [];
+  const ws = fakeSocket(sent);
+  let seen: ToolContext | undefined;
+  const streamOnly = {
+    name: 'stream_only', description: 'stream-only',
+    toolSpec: { name: 'stream_only', description: 'stream-only', inputSchema: { type: 'object' as const } },
+    async *stream(context: ToolContext) {
+      seen = context;
+      yield { type: 'toolStreamEvent' as const, data: 'working' };
+      return new ToolResultBlock({ toolUseId: context.toolUse.toolUseId, status: 'success', content: [new TextBlock('landed')] });
+    },
+  };
+  const agent = {} as ToolContext['agent'];
+  let contextFromRealtime: ToolContext | undefined;
+  const execute = makeExecuteTool([streamOnly], undefined, { agent });
+  const call = new RealtimeCall({
+    apiKey: 'test-key', stallMs: 0, backend: null,
+    agent,
+    tools: [streamOnly], executeTool: (name, args, context) => {
+      contextFromRealtime = context;
+      return execute(name, args, context);
+    },
+    micFactory: () => null,
+    speakerFactory: () => ({ write: () => {}, stop: () => {} }) as never,
+    socketFactory: () => ws,
+  });
+  const started = call.start();
+  ws.onopen?.();
+  await started;
+  sent.length = 0;
+  ws.deliver({ type: 'response.function_call_arguments.done', call_id: 'voice-1', name: 'stream_only', arguments: '{"x":1}' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const output = sent.find((frame) => (frame as any).item?.type === 'function_call_output') as any;
+  assert.equal(output.item.call_id, 'voice-1');
+  assert.equal(output.item.output, 'landed');
+  assert.equal(seen?.toolUse.toolUseId, 'voice-1');
+  assert.deepEqual(seen?.toolUse.input, { x: 1 });
+  assert.equal(seen?.agent, agent);
+  assert.equal(seen, contextFromRealtime, 'wrapper forwards RealtimeCall ToolContext unchanged');
+  call.stop();
+});
+
+test('realtime fallback executor also consumes stream-only SDK tools', async () => {
+  const sent: unknown[] = [];
+  const ws = fakeSocket(sent);
+  let seen: ToolContext | undefined;
+  const streamOnly = {
+    name: 'fallback_stream', description: 'fallback stream',
+    toolSpec: { name: 'fallback_stream', description: 'fallback stream', inputSchema: { type: 'object' as const } },
+    async *stream(context: ToolContext) {
+      seen = context;
+      return new ToolResultBlock({ toolUseId: context.toolUse.toolUseId, status: 'success', content: [new TextBlock('fallback landed')] });
+    },
+  };
+  const agent = {} as ToolContext['agent'];
+  const call = new RealtimeCall({
+    apiKey: 'test-key', stallMs: 0, backend: null, agent, tools: [streamOnly],
+    micFactory: () => null,
+    speakerFactory: () => ({ write: () => {}, stop: () => {} }) as never,
+    socketFactory: () => ws,
+  });
+  const started = call.start();
+  ws.onopen?.();
+  await started;
+  sent.length = 0;
+  ws.deliver({ type: 'response.function_call_arguments.done', call_id: 'fallback-1', name: 'fallback_stream', arguments: '{}' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const output = sent.find((frame) => (frame as any).item?.type === 'function_call_output') as any;
+  assert.equal(output.item.output, 'fallback landed');
+  assert.equal(seen?.toolUse.toolUseId, 'fallback-1');
+  assert.equal(seen?.agent, agent);
   call.stop();
 });
 

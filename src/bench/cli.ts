@@ -14,7 +14,7 @@
  * Results default to bench-results/sdk-native/ — never next to the v3 results.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TASKS } from './tasks.js';
@@ -22,7 +22,7 @@ import { createDecisionModel, resolveDecisionSpec } from './decider.js';
 import { HARNESS } from './episode.js';
 import { PROFILES, policyCfg } from './policy.js';
 import { BENCH_BODY_ENV, type Arm } from './runner.js';
-import { worldCfg } from './world.js';
+import { worldCfg, World } from './world.js';
 import { cfg } from '../config.js';
 
 export const RESULTS_ROOT = 'bench-results/sdk-native';
@@ -93,7 +93,7 @@ export async function armFor(name: string): Promise<Arm> {
   throw new Error(`unknown arm ${JSON.stringify(name)} — use one of ${ARMS.join(', ')}`);
 }
 
-export function buildRunManifest(p: { runId: string; arms: string[]; tasks: string[]; n: number; startedAt: string; argv: string[] }) {
+export function buildRunManifest(p: { runId: string; arms: string[]; tasks: string[]; n: number; startedAt: string; argv: string[]; resolvedImage: string }) {
   const body = {
     env: { ...BENCH_BODY_ENV },
     safety_reflexes: true,
@@ -112,7 +112,7 @@ export function buildRunManifest(p: { runId: string; arms: string[]; tasks: stri
     n: p.n,
     started_at: p.startedAt,
     argv: p.argv,
-    world: { image: worldCfg.image, version: worldCfg.version, seed: worldCfg.seed, difficulty: 'easy', mode: 'survival', tmpfs: '/data:size=3g' },
+    world: { image: worldCfg.image, resolved_image: p.resolvedImage, version: worldCfg.version, seed: worldCfg.seed, difficulty: 'easy', mode: 'survival', tmpfs: '/data:size=3g' },
     task_budgets: Object.fromEntries(p.tasks.map((id) => [id, { steps: TASKS[id].maxSteps, wall_s: TASKS[id].maxWallS }])),
     policy: {
       ...policyCfg,
@@ -136,7 +136,11 @@ async function episodeCmd(flags: Record<string, string>) {
   return 'exit';
 }
 
-function runCmd(flags: Record<string, string>) {
+export function episodeEnv(resolvedImage: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, BENCH_MC_IMAGE: resolvedImage };
+}
+
+async function runCmd(flags: Record<string, string>) {
   const arms = (flags.arms || 'decider').split(',').filter(Boolean);
   const tasks = (flags.tasks || Object.keys(TASKS).join(',')).split(',').filter(Boolean);
   for (const t of tasks) if (!TASKS[t]) throw new Error(`unknown task ${t}`);
@@ -146,6 +150,15 @@ function runCmd(flags: Record<string, string>) {
   const runId = flags['run-id'] || `${new Date().toISOString().slice(0, 10)}-${arms.join('+')}`;
   const out = resolveOut(flags.out, runId);
   createFreshRunOutput(out);
+  let resolvedImage: string;
+  try {
+    resolvedImage = await World.requireImageDigest();
+  } catch (err) {
+    // Directory claim happened first to keep concurrent launchers fenced. A
+    // preflight failure has written no scored state, so release only our empty claim.
+    rmSync(out, { recursive: false });
+    throw err;
+  }
   const manifest = buildRunManifest({
     runId,
     arms,
@@ -153,6 +166,7 @@ function runCmd(flags: Record<string, string>) {
     n,
     startedAt: new Date().toISOString(),
     argv: process.argv.slice(2),
+    resolvedImage,
   });
   writeFileSync(join(out, 'run.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   const self = fileURLToPath(import.meta.url);
@@ -160,6 +174,7 @@ function runCmd(flags: Record<string, string>) {
   for (const task of tasks) for (let i = 1; i <= n; i++) for (const arm of arms) {
     const r = spawnSync(process.execPath, ['--import', 'tsx', self, 'episode', '--arm', arm, '--task', task, '--n', String(i), '--out', out, '--run-id', runId, '--port-base', flags['port-base'] || '25600'], {
       stdio: 'inherit',
+      env: episodeEnv(resolvedImage),
       // A backstop, not a budget: the task's own wall cap binds inside the episode; this only
       // reaps a child wedged in world bootstrap or teardown (world start allows 240 s).
       timeout: (TASKS[task].maxWallS + 600) * 1000,

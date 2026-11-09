@@ -19,8 +19,8 @@ import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { countingTools } from '../src/bench/rig.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
-import { resolveOut, createFreshRunOutput, parseArgs, buildRunManifest } from '../src/bench/cli.js';
-import { dockerRunArgs } from '../src/bench/world.js';
+import { resolveOut, createFreshRunOutput, parseArgs, buildRunManifest, episodeEnv } from '../src/bench/cli.js';
+import { dockerRunArgs, World } from '../src/bench/world.js';
 import { SelfHostedDecisionModel } from '../src/bench/decider.js';
 
 /** A scripted world: a bag, a position, trees that dig_vein turns into logs. */
@@ -541,14 +541,27 @@ test('results guard: new results only under bench-results/sdk-native; v3 results
   assert.throws(() => parseArgs(['run', '--arms', '--tasks', 'logs16']), /--arms needs a value/);
 });
 
-test('run manifest records resolved world, budgets, policy profile and forced body configuration', () => {
-  const m = buildRunManifest({ runId: 'r', arms: ['decider', 'agent'], tasks: ['logs16'], n: 2, startedAt: '2026-11-09T00:00:00Z', argv: ['run'] });
+test('run manifest records resolved world, budgets, policy profile and forced body configuration', async () => {
+  const digest = 'itzg/minecraft-server@sha256:abc123';
+  const m = buildRunManifest({ runId: 'r', arms: ['decider', 'agent'], tasks: ['logs16'], n: 2, startedAt: '2026-11-09T00:00:00Z', argv: ['run'], resolvedImage: digest });
   assert.equal(m.harness, 'sdk-native-v1');
   assert.equal(m.world.seed, '8675309');
+  assert.equal(m.world.resolved_image, digest);
+  assert.equal(episodeEnv(digest, { KEEP: 'yes', BENCH_MC_IMAGE: 'moving:latest' }).BENCH_MC_IMAGE, digest,
+    'child episodes run the immutable image recorded by the parent manifest');
   assert.deepEqual(m.task_budgets.logs16, { steps: 20, wall_s: 420 });
   assert.equal(m.policy.profiles.decider.stateChars, PROFILES.decider.stateChars);
   assert.equal('agent' in m.policy.profiles, false);
   assert.deepEqual(m.body.env, BENCH_BODY_ENV);
   assert.equal(m.body.config.reflex.unstuckAfterMs, 20_000);
   assert.equal(m.body.config.combat.answerReach, 4);
+  const original = World.imageDigest;
+  try {
+    World.imageDigest = async () => null;
+    await assert.rejects(() => World.requireImageDigest('moving:latest'), /cannot resolve.*moving:latest.*pull or pin/);
+    World.imageDigest = async () => digest;
+    assert.equal(await World.requireImageDigest('moving:latest'), digest);
+  } finally {
+    World.imageDigest = original;
+  }
 });
