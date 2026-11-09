@@ -36,7 +36,12 @@ export function parseArgs(argv: string[]): { cmd: string; flags: Record<string, 
   const flags: Record<string, string> = {};
   const rest: string[] = [];
   for (let i = 0; i < tail.length; i++) {
-    if (tail[i].startsWith('--')) { flags[tail[i].slice(2)] = tail[i + 1] ?? ''; i++; } else rest.push(tail[i]);
+    if (!tail[i].startsWith('--')) { rest.push(tail[i]); continue; }
+    const key = tail[i].slice(2);
+    const value = tail[i + 1];
+    if (!value || value.startsWith('--')) throw new Error(`--${key} needs a value`);
+    flags[key] = value;
+    i++;
   }
   return { cmd, flags, rest };
 }
@@ -48,6 +53,11 @@ export function resolveOut(out: string | undefined, runId: string, cwd = process
     throw new Error(`refusing to write ${dir}: results from this harness go under ${RESULTS_ROOT}/ (v3 results are immutable)`);
   }
   return dir;
+}
+
+/** A run owns the directory exclusively once any path exists there. */
+export function assertFreshRunOutput(dir: string): void {
+  if (existsSync(dir)) throw new Error(`${dir} exists — use a new run id/output; scored runs are append-immutable`);
 }
 
 async function llm() {
@@ -125,10 +135,8 @@ function runCmd(flags: Record<string, string>) {
   if (!Number.isInteger(n) || n < 1) throw new Error(`--n must be a positive integer, got ${JSON.stringify(flags.n)}`);
   const runId = flags['run-id'] || `${new Date().toISOString().slice(0, 10)}-${arms.join('+')}`;
   const out = resolveOut(flags.out, runId);
-  if (existsSync(join(out, 'episodes.jsonl'))) {
-    throw new Error(`${out}/episodes.jsonl exists — use a new run id/output; scored rows are append-immutable`);
-  }
-  mkdirSync(out, { recursive: true });
+  assertFreshRunOutput(out);
+  mkdirSync(out, { recursive: false });
   const manifest = buildRunManifest({
     runId,
     arms,

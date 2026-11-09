@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/site-numbers.mjs",
-  "commit": "afcf086",
+  "commit": "5010284",
   "version": "0.1.0",
   "node": ">=22",
   "license": "MIT",
@@ -261,7 +261,7 @@
   },
   "testFiles": 91,
   "testCases": 894,
-  "loc": 23589,
+  "loc": 23597,
   "srcFiles": 70,
   "rails": 7,
   "routes": [

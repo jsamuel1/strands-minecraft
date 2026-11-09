@@ -5,6 +5,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DecisionModel, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question } from '@strands-agents/sdk';
 import type { Body, BodyEvent, BodySnapshot, ToolOutcome, Vec } from '../src/bench/body.js';
 import { toOutcome } from '../src/bench/body.js';
@@ -15,7 +18,7 @@ import { runPolicy, runAgent, buildAgent, type Clock } from '../src/bench/loops.
 import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
-import { resolveOut, parseArgs, buildRunManifest } from '../src/bench/cli.js';
+import { resolveOut, assertFreshRunOutput, parseArgs, buildRunManifest } from '../src/bench/cli.js';
 import { dockerRunArgs } from '../src/bench/world.js';
 import { SelfHostedDecisionModel } from '../src/bench/decider.js';
 
@@ -344,13 +347,21 @@ test('report: median (min–max), budget stars, infra kept out of fail', () => {
   assert.match(sparse, /\| decider \| r \| night \| 1 \| 0 \| 0\+1 infra \| – \| – \| – \| – \|/, 'a lost episode is shown, never dropped');
 });
 
-test('results guard: new results only under bench-results/sdk-native; v3 results are refused', () => {
+test('results guard: new results only under bench-results/sdk-native; v3 results and existing run dirs are refused', () => {
   assert.match(resolveOut(undefined, 'x', '/repo'), /\/repo\/bench-results\/sdk-native\/x$/);
   assert.throws(() => resolveOut('bench-results/2026-09-29-v3-policy', 'x', '/repo'), /immutable/);
   assert.throws(() => resolveOut('/repo/bench-results', 'x', '/repo'), /immutable/);
   assert.throws(() => resolveOut('bench-results/RESULTS-v3.md', 'x', '/repo'), /immutable/);
   assert.doesNotThrow(() => resolveOut('/tmp/scratch-run', 'x', '/repo'));
+  const existing = mkdtempSync(join(tmpdir(), 'mcbench-existing-'));
+  try {
+    assert.throws(() => assertFreshRunOutput(existing), /scored runs are append-immutable/);
+    assert.doesNotThrow(() => assertFreshRunOutput(join(existing, 'new-run')));
+  } finally {
+    rmSync(existing, { recursive: true, force: true });
+  }
   assert.deepEqual(parseArgs(['run', '--arms', 'decider', '--n', '2', 'extra']), { cmd: 'run', flags: { arms: 'decider', n: '2' }, rest: ['extra'] });
+  assert.throws(() => parseArgs(['run', '--arms', '--tasks', 'logs16']), /--arms needs a value/);
 });
 
 test('run manifest records resolved world, budgets, policy profile and forced body configuration', () => {
