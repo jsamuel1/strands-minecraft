@@ -1,0 +1,23 @@
+{
+  "run_id": "2026-11-09-smoke-decider-cpu",
+  "arms": [
+    "decider"
+  ],
+  "tasks": [
+    "wood_tools",
+    "logs16"
+  ],
+  "n": 1,
+  "started_at": "2026-11-09T10:26:48.001Z",
+  "argv": [
+    "run",
+    "--arms",
+    "decider",
+    "--tasks",
+    "wood_tools,logs16",
+    "--n",
+    "1",
+    "--run-id",
+    "2026-11-09-smoke-decider-cpu"
+  ]
+}

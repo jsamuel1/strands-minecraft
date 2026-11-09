@@ -187,12 +187,15 @@ Knobs: `BENCH_MC_IMAGE`, `BENCH_MC_VERSION`, `BENCH_SEED`, `--port-base`
 ## Validation on this branch
 
 Smoke run `bench-results/sdk-native/2026-11-09-smoke-decider-cpu/` (harness
-`667612f`, CPU decider on this host, no paid infra), n = 1 per task:
+`3689192`, CPU decider on this host, no paid infra), n = 1 per task:
 
-- wood_tools: success in 8 decisions, each `done` by the world check; loop
-  186.4 s, decide 54.9 s, setup 33.5 s, 94 tool calls, 0 deaths.
-- logs16: success in 4 decisions; loop 106.7 s, decide 15.3 s.
+- wood_tools: success in 5 decisions, each `done` by the world check; loop
+  52.8 s, decide 22.2 s, setup 34.3 s, 57 tool calls, 0 deaths.
+- logs16: success in 6 decisions; loop 228.0 s, decide 44.6 s. Step 3 is a
+  `no_effect`: `dig_vein` said "Dug 6 block(s) of oak_log" but no log reached
+  the bag, and the next request told the model so.
 
-5 of the 12 answers had `prob_sum` 0.9999 or 1.0001. One episode per task is a
+8 of the 11 answers had `prob_sum` 0.9999 or 1.0001. One episode per task is a
 smoke test, not a result. The seed fixes terrain, not mob or tick timing, so
-same-seed episodes differ (an earlier same-seed wood_tools took 5 decisions).
+same-seed episodes differ (earlier same-seed wood_tools runs took 5 and 8
+decisions).
