@@ -6,6 +6,10 @@
 #   ./deploy.sh delete    delete the endpoint (it bills while it exists)
 #   ./deploy.sh status
 #
+# Current public source: github.com/strands-labs/strands-decider. This benchmark image used pre-publication
+# source at HOBSON_REF; pass HOBSON_SRC as a checkout containing that historical commit. The published v19
+# adapter is at huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19.
+#
 # 2B bf16 (~5 GB) fits any >=24 GB Ampere+/Ada GPU (fla Triton + bf16; T4 g4dn is excluded). 2026-10-01: g5.xlarge alone hit
 # InsufficientInstanceCapacity, so the pool adds the >=24 GB types that sit in no other endpoint pool and have quota.
 # CreateEndpoint checks quota for EVERY InstancePools entry, so only types with free quota are listed.
@@ -31,9 +35,10 @@ aws() { command aws --profile "$PROFILE" --region "$REGION" "$@"; }
 
 case "${1:-}" in
 build)
+  : "${HOBSON_SRC:?set HOBSON_SRC to a checkout containing benchmark source commit $HOBSON_REF}"
   aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1 || aws ecr create-repository --repository-name "$REPO" >/dev/null
   aws ecr get-login-password | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com" >/dev/null
-  src=${HOBSON_SRC:-$HOME/src/hobson}
+  src=$HOBSON_SRC
   rm -rf "$HERE/hobson-src" && mkdir -p "$HERE/hobson-src"
   git -C "$src" archive "$HOBSON_REF" | tar -x -C "$HERE/hobson-src"   # exact commit, no .git, no credentials
   docker build --build-arg HOBSON_REF="$HOBSON_REF" -t "$IMAGE" "$HERE"

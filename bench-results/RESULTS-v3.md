@@ -45,7 +45,7 @@ goal?") run a Minecraft body end to end, and where does it hand off to an LLM?
   | Jev (jev-1.13.0) | decision | TypeSafe API |
   | Kev-4B | decision | SageMaker ml.g5.xlarge, us-west-2 |
   | CLM-v0.1-8B | decision | SageMaker ml.g5.xlarge, us-west-2 |
-  | Hobson-2B v19 (strands-decider) | decision | SageMaker ml.g5.xlarge, **us-east-1** |
+  | [Hobson-2B v19](https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19) ([strands-decider](https://github.com/strands-labs/strands-decider)) | decision | SageMaker ml.g5.xlarge, **us-east-1** |
   | Claude Sonnet 5 | LLM agent | Bedrock |
   | GPT-5.6 Terra | LLM agent | Bedrock Mantle |
 
@@ -123,7 +123,9 @@ starred) is in [`stats` below](#full-table).
   - The only difference is that `767379d` drops empty containers from the *decision* state, which the LLM
     agents never receive.
   - Hobson's 15 episodes record `767379d` (1) and `7d29c3b` (14). 7d29c3b only added the policy run's
-    result files; it changed no harness code.
+    result files; it changed no harness code. Its image used historical pre-publication strands-decider source
+    at `4f1d7d0`; that source commit is not in the current public repository, while the v19 model adapter is
+    public on Hugging Face.
 - **Latency isn't comparable across regions.** Hobson ran in us-east-1 (us-west-2 had no GPU capacity), so
   its *client* latency includes a cross-region hop. Server latency is comparable: CLM 266 ms, Hobson
   514 ms in-episode. Hobson's warm latency on a short state was 95 ms.

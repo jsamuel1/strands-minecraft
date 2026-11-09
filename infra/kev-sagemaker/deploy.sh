@@ -5,8 +5,7 @@
 #   ./deploy.sh delete    delete the endpoint (it bills while it exists)
 #   ./deploy.sh status
 #
-# Image: the Kev-27B BYOC image already in ECR (kev-sagemaker:27b-1b62aa2d, built from
-# harness-sdk/.agents/scratchpad/kev-sm/container). Its sm_serve.py is model-agnostic: backbone from
+# Image: set KEV_IMAGE_TAG to an image containing a model-agnostic Kev server: backbone from
 # /opt/ml/model/base, adapter + head from /opt/ml/model/adapter, loaded bf16 onto one GPU with
 # kev.serve's CUDA serving defaults (CUDA graphs + fused Qwen3.5 kernels). KEV_MODEL only labels /v1/models.
 # 4B bf16 is ~9 GB resident, so any >=24 GB GPU fits; InstancePools falls back through the types that

@@ -9,8 +9,9 @@
 # DeltaNet falls back to slow reference PyTorch).
 FROM python:3.12-slim
 ARG HOBSON_REF=4f1d7d0
-# The repo is private; deploy.sh exports ~/src/hobson at HOBSON_REF (git archive) into the build
-# context as hobson-src/, so no credential ever enters the image.
+# Benchmark source commit 4f1d7d0 predates the public repository history; deploy.sh requires a caller-supplied
+# checkout and exports that exact commit into the build context as hobson-src/. No .git data or credentials enter
+# the image. Current source: github.com/strands-labs/strands-decider.
 COPY hobson-src /opt/hobson
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir torch==2.7.1 --index-url https://download.pytorch.org/whl/cu126 \
