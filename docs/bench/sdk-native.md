@@ -142,12 +142,13 @@ failures are identifiable through `provider_errors` with no `cap_hit`, rather
 than being mislabelled as step/wall exhaustion. An episode process that dies without writing a row gets an infra row.
 
 What "reproducible reset" covers: every episode starts from a new container
-with the same image tag, game version and seed, a world on tmpfs, a fresh
-`MEMORY_DIR` and a fresh process. That fixes terrain and spawn. It does not fix
-mob spawning, mob movement or server tick timing, so two same-seed episodes can
-differ, as they did in v3. `itzg/minecraft-server:latest` is a moving tag: each
-row records the digest it ran (`mc_image`); pin `BENCH_MC_IMAGE` to that digest
-for a cohort.
+with the same resolved image digest, game version and seed, a world on tmpfs, a
+fresh `MEMORY_DIR` and a fresh process. Before writing `run.json`, the parent
+resolves `BENCH_MC_IMAGE` to a local immutable digest, records it as
+`world.resolved_image`, and passes that digest to every episode child. It
+refuses the scored run if Docker cannot resolve the image. This fixes terrain
+and spawn. It does not fix mob spawning, mob movement or server tick timing, so
+two same-seed episodes can differ, as they did in v3.
 
 ## Run it
 
@@ -185,9 +186,10 @@ Arms within one (task, episode) are interleaved.
 | `agent` | SDK `Agent` with the body's tools | same |
 
 **Where results go:** `bench-results/sdk-native/<run-id>/episodes.jsonl`, plus
-`run.json` (harness, arms, tasks, n, argv, resolved world config, task budgets,
-policy profiles, forced body-rail settings and effective sentinel/reflex/combat
-configuration). The CLI refuses any `--out`
+`run.json` (harness, arms, tasks, n, argv, requested image plus its resolved
+immutable digest, game config, task budgets, policy profiles, forced body-rail
+settings and effective sentinel/reflex/combat configuration). The CLI refuses
+any `--out`
 under `bench-results/` outside `sdk-native/`, and refuses every existing
 `episodes.jsonl`; scored run directories are append-immutable.
 
