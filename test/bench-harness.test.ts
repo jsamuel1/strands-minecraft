@@ -333,6 +333,27 @@ test('policy episode: a terminal decision-model failure is recorded once without
   assert.match(d.error!, /not one of the offered ids/);
 });
 
+test('agent episode: episode-owned cancellation before a tool is a zero-step wall cap', async () => {
+  const b = new FakeBody();
+  const controller = new AbortController();
+  const agent = {
+    addHook: () => {},
+    invoke: async (_prompt: string, options: { cancelSignal: AbortSignal }) => {
+      assert.equal(options.cancelSignal, controller.signal);
+      controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      return { stopReason: 'cancelled', metrics: { latestAgentInvocation: { usage: { inputTokens: 1, outputTokens: 0 } } } };
+    },
+  } as unknown as ReturnType<typeof buildAgent>;
+  const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'cancelled', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runAgent(ep, agent, TASKS.logs16, b, {}, fakeClock(), { timeoutSignal: () => controller.signal });
+  assert.equal(ep.steps, 0, 'deadline fired before any embodied action');
+  assert.equal(ep.cap_hit, 'wall');
+  assert.deepEqual(ep.provider_errors, {}, 'episode timeout is not blamed on provider');
+  assert.deepEqual(ep.error_samples, {});
+  assert.equal(ep.throttles, 0);
+  assert.equal(ep.tokens_in, 1, 'available cancellation evidence is retained');
+});
+
 test('agent episode: a turn that reaches the goal after the wall deadline does not score', async () => {
   const clock = fakeClock();
   class LateAgentBody extends FakeBody {

@@ -151,10 +151,10 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
       body.setBusy(false);
     }
     const actionAttempted = body.state().counters.toolCalls > toolCallsBefore;
-    // A provider failure before any tool ran is not an embodied step. If tools
-    // did run before a later model failure, preserve that step and judge its
-    // resulting world state once before stopping.
-    if (invocationFailed && !actionAttempted) break;
+    // Provider failure or deadline cancellation before any tool ran is not an
+    // embodied step. If tools already ran, retain one world-checked step even
+    // when the invocation later fails or the deadline cancels the turn.
+    if (!actionAttempted && (invocationFailed || cancelled)) break;
     ep.steps += 1;
     // A turn can start inside the budget and finish after it. Judge resulting
     // world state, but never score a goal reached outside the shared deadline.
