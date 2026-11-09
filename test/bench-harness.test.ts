@@ -240,6 +240,27 @@ test('policy episode: the wall-clock cap binds before the next decision', async 
   assert.equal(ep.cap_hit, 'wall');
 });
 
+test('policy episode: an action that reaches the goal after the wall deadline does not score', async () => {
+  const b = new FakeBody();
+  const clock = fakeClock();
+  class LateBody extends FakeBody {
+    override async call(tool: string, args: Record<string, unknown> = {}): Promise<ToolOutcome> {
+      const out = await super.call(tool, args);
+      if (tool === 'dig_vein') clock.t = 3;
+      return out;
+    }
+  }
+  const late = new LateBody();
+  late.digGives = 16;
+  const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runPolicy(ep, new ScriptedModel(() => 'fell_tree_0'), PROFILES.decider, { ...TASKS.logs16, maxWallS: 2 }, late, {}, clock, { wait: noWait });
+  assert.equal(ep.success, false, 'world goal reached, but only after the shared wall cap');
+  assert.equal(ep.progress, 1, 'late world effect remains observable');
+  assert.equal(ep.cap_hit, 'wall');
+  assert.equal(ep.steps, 1);
+  assert.equal(ep.time_to_goal_s, null);
+});
+
 test('policy episode: each native decision receives the remaining wall budget as an abort signal', async () => {
   const b = new FakeBody();
   b.digGives = 0;
@@ -257,8 +278,13 @@ test('policy episode: each native decision receives the remaining wall budget as
   }
   const model = new SignalModel();
   const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
-  await runPolicy(ep, model, PROFILES.decider, { ...TASKS.logs16, maxSteps: 2, maxWallS: 2 }, b, {}, clock, { wait: noWait });
+  const timeoutMs: number[] = [];
+  await runPolicy(ep, model, PROFILES.decider, { ...TASKS.logs16, maxSteps: 2, maxWallS: 2 }, b, {}, clock, {
+    wait: noWait,
+    timeoutSignal: (ms) => { timeoutMs.push(ms); return new AbortController().signal; },
+  });
   assert.equal(model.signals.length, 2);
+  assert.deepEqual(timeoutMs, [2000, 1000], 'remaining wall budget reaches each native decision');
   assert.ok(model.signals.every((s) => !s.aborted));
   assert.equal(ep.cap_hit, 'steps');
 });
@@ -281,6 +307,37 @@ test('policy episode: a terminal decision-model failure is recorded once without
   const d = await brain.step();
   assert.equal(d.verdict, 'no_effect');
   assert.match(d.error!, /not one of the offered ids/);
+});
+
+test('agent episode: a turn that reaches the goal after the wall deadline does not score', async () => {
+  const clock = fakeClock();
+  class LateAgentBody extends FakeBody {
+    override async call(tool: string, args: Record<string, unknown> = {}): Promise<ToolOutcome> {
+      if (tool === 'act') { this.inv.oak_log = 16; clock.t = 3; return toOutcome('acted'); }
+      return super.call(tool, args);
+    }
+  }
+  const b = new LateAgentBody();
+  const timeoutMs: number[] = [];
+  const signal = new AbortController().signal;
+  const agent = {
+    addHook: () => {},
+    invoke: async (_prompt: string, options: { cancelSignal: AbortSignal }) => {
+      assert.equal(options.cancelSignal, signal);
+      await b.call('act');
+      return { stopReason: 'end_turn', metrics: { latestAgentInvocation: { usage: { inputTokens: 1, outputTokens: 1 } } } };
+    },
+  } as unknown as ReturnType<typeof buildAgent>;
+  const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'late', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runAgent(ep, agent, { ...TASKS.logs16, maxWallS: 2 }, b, {}, clock, {
+    timeoutSignal: (ms) => { timeoutMs.push(ms); return signal; },
+  });
+  assert.deepEqual(timeoutMs, [2000], 'remaining wall budget reaches the agent invocation');
+  assert.equal(ep.success, false);
+  assert.equal(ep.progress, 1);
+  assert.equal(ep.cap_hit, 'wall');
+  assert.equal(ep.steps, 1);
+  assert.equal(ep.time_to_goal_s, null);
 });
 
 test('agent episode: a terminal model failure is recorded once and stops before burning the step budget', async () => {

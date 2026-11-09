@@ -40,8 +40,9 @@ const budgetFor = (task: Task, steps: number, used: number, progress: number) =>
   progress,
 });
 
-export async function runPolicy(ep: Episode, model: DecisionModel, profile: ContextProfile, task: Task, body: Body, marks: Marks, clock: Clock = realClock, brainOpts: { wait?: (ms: number) => Promise<void> } = {}): Promise<void> {
-  const brain = new PolicyBrain(model, body, task.goal, { profile, now: () => clock.now(), ...brainOpts });
+export async function runPolicy(ep: Episode, model: DecisionModel, profile: ContextProfile, task: Task, body: Body, marks: Marks, clock: Clock = realClock, brainOpts: { wait?: (ms: number) => Promise<void>; timeoutSignal?: (ms: number) => AbortSignal } = {}): Promise<void> {
+  const { timeoutSignal = AbortSignal.timeout, ...policyOpts } = brainOpts;
+  const brain = new PolicyBrain(model, body, task.goal, { profile, now: () => clock.now(), ...policyOpts });
   let terminalFailure = false;
   ep.state_chars_budget = profile.stateChars;
   ep.history_steps_budget = profile.historySteps;
@@ -56,7 +57,7 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     brain.budget = budgetFor(task, i, used, ep.progress);
     // Bound every provider by the episode's remaining wall budget. Provider
     // defaults (or a hung custom fetch) must not let one decision overrun it.
-    const d = await brain.step(AbortSignal.timeout(Math.max(1, Math.floor((task.maxWallS - used) * 1000))));
+    const d = await brain.step(timeoutSignal(Math.max(1, Math.floor((task.maxWallS - used) * 1000))));
     ep.model_calls += 1;
     if (d.action === 'error' && d.error) {
       terminalFailure = true;
@@ -76,12 +77,14 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     if (terminalFailure) break;
     ep.steps += 1;
     const [done, progress] = task.check(await goalState(body, marks));
+    const elapsed = clock.now() - t0;
     ep.progress = progress;
-    if (done) {
+    if (done && elapsed <= task.maxWallS) {
       ep.success = true;
-      ep.time_to_goal_s = +(clock.now() - t0).toFixed(1);
+      ep.time_to_goal_s = +elapsed.toFixed(1);
       break;
     }
+    if (elapsed >= task.maxWallS) break;
   }
   ep.loop_s = +(clock.now() - t0).toFixed(1);
   ep.decide_s = +(lat.reduce((a, b) => a + b, 0) / 1000).toFixed(2);
@@ -112,7 +115,8 @@ export const AGENT_FIRST_PROMPT = (goal: string) =>
   'Work step by step with your tools. Use the composite tools (find_blocks, dig_vein, craft_item). ' +
   'Do not start journeys or hire workers — just act.';
 
-export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body & { digest?: () => string }, marks: Marks, clock: Clock = realClock): Promise<void> {
+export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body & { digest?: () => string }, marks: Marks, clock: Clock = realClock, opts: { timeoutSignal?: (ms: number) => AbortSignal } = {}): Promise<void> {
+  const timeoutSignal = opts.timeoutSignal ?? AbortSignal.timeout;
   const stats = instrumentAgent(agent);
   let terminalFailure = false;
   const t0 = clock.now();
@@ -126,7 +130,7 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
     const toolCallsBefore = body.state().counters.toolCalls;
     body.setBusy(true);
     try {
-      const r = await agent.invoke(prompt, { limits: { turns: 4 }, cancelSignal: AbortSignal.timeout(remainingMs) });
+      const r = await agent.invoke(prompt, { limits: { turns: 4 }, cancelSignal: timeoutSignal(remainingMs) });
       const u = r.metrics?.latestAgentInvocation?.usage;
       if (u) {
         ep.tokens_in += u.inputTokens ?? 0;
@@ -149,14 +153,17 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
     // resulting world state once before stopping.
     if (invocationFailed && !actionAttempted) break;
     ep.steps += 1;
+    // A turn can start inside the budget and finish after it. Judge resulting
+    // world state, but never score a goal reached outside the shared deadline.
     const [done, progress] = task.check(await goalState(body, marks));
+    const elapsed = clock.now() - t0;
     ep.progress = progress;
-    if (done) {
+    if (done && elapsed <= task.maxWallS) {
       ep.success = true;
-      ep.time_to_goal_s = +(clock.now() - t0).toFixed(1);
+      ep.time_to_goal_s = +elapsed.toFixed(1);
       break;
     }
-    if (cancelled || invocationFailed || clock.now() - t0 >= task.maxWallS) break;
+    if (cancelled || invocationFailed || elapsed >= task.maxWallS) break;
   }
   ep.loop_s = +(clock.now() - t0).toFixed(1);
   // A model/provider failure is neither a step nor wall-cap hit. The error
