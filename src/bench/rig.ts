@@ -15,6 +15,7 @@
  */
 import { Vec3 } from 'vec3';
 import type { Bot } from 'mineflayer';
+import type { ToolContext, ToolStreamGenerator } from '@strands-agents/sdk';
 import type { LiveBody } from '../body.js';
 import { allTools } from '../tools/index.js';
 import { guardTools } from '../tools/connection-guard.js';
@@ -32,7 +33,8 @@ export const REFLEX_MODES_OFF = 'item_magnet,elbow_room,idle_staring';
 
 export interface MountedTool {
   toolSpec: { name: string; description?: string; inputSchema?: unknown };
-  invoke: (input: unknown) => Promise<unknown>;
+  invoke: (input: unknown, context?: ToolContext) => Promise<unknown>;
+  stream: (context: ToolContext) => ToolStreamGenerator;
 }
 
 /** What occupies each position, and whether it blocks movement (a full collision box). */
@@ -45,13 +47,29 @@ export function probeBlocks(bot: Pick<Bot, 'blockAt'>, positions: Vec[], max = 2
 
 /** Counts every tool call (policy steps, perception, agent calls alike): the body's own counter. */
 export function countingTools<T extends MountedTool>(tools: T[], counters: { toolCalls: number; toolErrors: number }, perTool: Record<string, number>): T[] {
+  const started = (name: string) => {
+    counters.toolCalls += 1;
+    perTool[name] = (perTool[name] ?? 0) + 1;
+  };
   return tools.map((t) => new Proxy(t, {
     get(obj, prop) {
       if (prop === 'invoke') {
-        return async (input: unknown) => {
-          counters.toolCalls += 1;
-          perTool[obj.toolSpec.name] = (perTool[obj.toolSpec.name] ?? 0) + 1;
-          try { return await obj.invoke(input); } catch (err) { counters.toolErrors += 1; throw err; }
+        return async (input: unknown, context?: ToolContext) => {
+          started(obj.toolSpec.name);
+          try { return await obj.invoke(input, context); } catch (err) { counters.toolErrors += 1; throw err; }
+        };
+      }
+      if (prop === 'stream') {
+        return async function* (context: ToolContext): ToolStreamGenerator {
+          started(obj.toolSpec.name);
+          try {
+            const result = yield* obj.stream(context);
+            if (result.status === 'error') counters.toolErrors += 1;
+            return result;
+          } catch (err) {
+            counters.toolErrors += 1;
+            throw err;
+          }
         };
       }
       const v = Reflect.get(obj, prop, obj);

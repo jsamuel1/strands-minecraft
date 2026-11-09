@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DecisionModel, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question } from '@strands-agents/sdk';
+import { DecisionModel, FunctionTool, Model, ModelError, type DecisionCallOptions, type DecisionInput, type DecisionResult, type Question, type StreamOptions, type Message } from '@strands-agents/sdk';
 import type { Body, BodyEvent, BodySnapshot, ToolOutcome, Vec } from '../src/bench/body.js';
 import { toOutcome } from '../src/bench/body.js';
 import { candidates, decisionState, dropEmpty, buildQuestions, PolicyBrain, PROFILES, pyJson, stepOutcome, cleanOutcome, formatEvents, boxPlan, type Observation, type Step } from '../src/bench/policy.js';
@@ -16,6 +16,7 @@ import { checkAction, toolReason, type Snapshot } from '../src/bench/verify.js';
 import { SUITE, TASKS, UNCAPPED_STEPS, applyMarks } from '../src/bench/tasks.js';
 import { runPolicy, runAgent, buildAgent, type Clock } from '../src/bench/loops.js';
 import { BENCH_BODY_ENV } from '../src/bench/runner.js';
+import { countingTools } from '../src/bench/rig.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
 import { resolveOut, createFreshRunOutput, parseArgs, buildRunManifest } from '../src/bench/cli.js';
@@ -352,6 +353,73 @@ test('agent episode: episode-owned cancellation before a tool is a zero-step wal
   assert.deepEqual(ep.error_samples, {});
   assert.equal(ep.throttles, 0);
   assert.equal(ep.tokens_in, 1, 'available cancellation evidence is retained');
+});
+
+test('agent episode: real SDK model-stream cancellation is wall cap without provider attribution', async () => {
+  const controller = new AbortController();
+  class CancelledModel extends Model {
+    updateConfig() {}
+    getConfig() { return { modelId: 'cancelled' }; }
+    async *stream(_messages: Message[], options?: StreamOptions): AsyncIterable<never> {
+      controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      throw options?.cancelSignal?.reason;
+    }
+  }
+  const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'cancelled', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runAgent(ep, buildAgent(new CancelledModel(), [], 'test'), TASKS.logs16, new FakeBody(), {}, fakeClock(), {
+    timeoutSignal: () => controller.signal,
+  });
+  assert.equal(ep.steps, 0);
+  assert.equal(ep.model_calls, 1, 'cancelled model call remains latency/decision evidence');
+  assert.equal(ep.cap_hit, 'wall');
+  assert.deepEqual(ep.provider_errors, {}, 'AfterModelCallEvent cancellation is not provider failure');
+  assert.deepEqual(ep.error_samples, {});
+  assert.equal(ep.throttles, 0);
+});
+
+test('agent episode: real SDK stream tool is counted and retained when wall cancellation follows its effect', async () => {
+  const counters = { toolCalls: 0, toolErrors: 0 };
+  const per: Record<string, number> = {};
+  const controller = new AbortController();
+  const clock = fakeClock();
+  class CounterBody extends FakeBody {
+    override state(): BodySnapshot {
+      return { ...super.state(), counters: { ...counters, deaths: this.deaths, reconnects: 0 } };
+    }
+  }
+  const b = new CounterBody();
+  const action = new FunctionTool({
+    name: 'act', description: 'Act once.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    callback: () => {
+      b.inv.oak_log = 16;
+      clock.t = 3;
+      controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      return 'acted';
+    },
+  });
+  class ToolThenCancelModel extends Model {
+    updateConfig() {}
+    getConfig() { return { modelId: 'tool-then-cancel' }; }
+    async *stream(_messages: Message[], _options?: StreamOptions) {
+      yield { type: 'modelMessageStartEvent' as const, role: 'assistant' as const };
+      yield { type: 'modelContentBlockStartEvent' as const, start: { type: 'toolUseStart' as const, name: 'act', toolUseId: 'act-1' } };
+      yield { type: 'modelContentBlockDeltaEvent' as const, delta: { type: 'toolUseInputDelta' as const, input: '{}' } };
+      yield { type: 'modelContentBlockStopEvent' as const };
+      yield { type: 'modelMessageStopEvent' as const, stopReason: 'toolUse' as const };
+      yield { type: 'modelMetadataEvent' as const, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } };
+    }
+  }
+  const tools = countingTools([action], counters, per);
+  const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'tool-then-cancel', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runAgent(ep, buildAgent(new ToolThenCancelModel(), tools, 'test'), { ...TASKS.logs16, maxWallS: 2 }, b, {}, clock, {
+    timeoutSignal: () => controller.signal,
+  });
+  assert.equal(ep.steps, 1, 'one real embodied action remains after cancellation');
+  assert.equal(ep.progress, 1, 'late world effect remains observable but is not scored');
+  assert.equal(ep.success, false);
+  assert.equal(ep.cap_hit, 'wall');
+  assert.deepEqual(counters, { toolCalls: 1, toolErrors: 0 });
+  assert.deepEqual(per, { act: 1 });
 });
 
 test('agent episode: a turn that reaches the goal after the wall deadline does not score', async () => {

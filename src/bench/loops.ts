@@ -104,7 +104,9 @@ export function instrumentAgent(agent: Agent): { latencies: number[]; errors: Re
   agent.addHook(BeforeModelCallEvent, () => { started = performance.now(); });
   agent.addHook(AfterModelCallEvent, (e) => {
     out.latencies.push(+(performance.now() - started).toFixed(1));
-    if (e.error) {
+    // External episode cancellation passes through this hook as an error event,
+    // but it is wall-budget exhaustion, not a provider failure.
+    if (e.error && !e.agent.cancelSignal.aborted) {
       const n = e.error.name || 'Error';
       out.errors[n] = (out.errors[n] ?? 0) + 1;
       out.samples[n] ??= e.error.message.slice(0, 300);

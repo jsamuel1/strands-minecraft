@@ -5,6 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { FunctionTool, type JSONValue, type ToolContext } from '@strands-agents/sdk';
 import { FakeWorld, fakeBot } from './fake-bot.js';
 import { Rig, probeBlocks, countingTools } from '../src/bench/rig.js';
 import type { LiveBody } from '../src/body.js';
@@ -32,12 +33,56 @@ test('rig: the benchmark mounts the game bot\'s own tools (minus capture_view) a
   assert.deepEqual(rig.state().inv, { oak_log: 1 });
 });
 
-test('rig: a tool that throws is ok:false with its message, and counts as a tool error', async () => {
+function toolContext(name: string, input: JSONValue = {}): ToolContext {
+  return {
+    toolUse: { name, toolUseId: `${name}-1`, input },
+    agent: {} as never,
+    invocationState: {},
+    cancelSignal: new AbortController().signal,
+    interrupt: () => { throw new Error('not used'); },
+  };
+}
+
+test('rig: agent stream executions preserve context and count success/error exactly once', async () => {
   const counters = { toolCalls: 0, toolErrors: 0 };
   const per: Record<string, number> = {};
-  const [t] = countingTools([{ toolSpec: { name: 'boom' }, invoke: async (_input: unknown) => { throw new Error('missing 2 sticks'); } }], counters, per);
-  await assert.rejects(t.invoke({}), /missing 2 sticks/);
-  assert.deepEqual(counters, { toolCalls: 1, toolErrors: 1 });
+  let seen: ToolContext | undefined;
+  const ok = new FunctionTool({
+    name: 'ok', description: '', inputSchema: { type: 'object' },
+    callback: (_input, context) => { seen = context; return 'done'; },
+  });
+  const bad = new FunctionTool({
+    name: 'bad', description: '', inputSchema: { type: 'object' },
+    callback: () => { throw new Error('stream failed'); },
+  });
+  const [countedOk, countedBad] = countingTools([ok, bad], counters, per);
+  const context = toolContext('ok');
+  let next = await countedOk.stream(context).next();
+  while (!next.done) next = await countedOk.stream(context).next();
+  assert.equal(next.value.status, 'success');
+  assert.equal(seen, context, 'SDK ToolContext, including cancel signal, reaches callback unchanged');
+
+  let failed = await countedBad.stream(toolContext('bad')).next();
+  while (!failed.done) failed = await countedBad.stream(toolContext('bad')).next();
+  assert.equal(failed.value.status, 'error');
+  assert.deepEqual(counters, { toolCalls: 2, toolErrors: 1 });
+  assert.deepEqual(per, { ok: 1, bad: 1 });
+});
+
+test('rig: direct invoke remains one counted call and preserves optional context', async () => {
+  const counters = { toolCalls: 0, toolErrors: 0 };
+  const per: Record<string, number> = {};
+  let seen: ToolContext | undefined;
+  const raw = new FunctionTool({
+    name: 'direct', description: '', inputSchema: { type: 'object' },
+    callback: (_input, context) => { seen = context; return 'done'; },
+  });
+  const [counted] = countingTools([raw], counters, per);
+  const context = toolContext('direct');
+  assert.equal(await counted.invoke({}, context), 'done');
+  assert.equal(seen, context);
+  assert.deepEqual(counters, { toolCalls: 1, toolErrors: 0 });
+  assert.deepEqual(per, { direct: 1 });
 });
 
 test('rig: the block probe reads world truth (solid = full collision box) and caps the batch', () => {
