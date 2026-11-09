@@ -15,7 +15,7 @@
  */
 import { Vec3 } from 'vec3';
 import type { Bot } from 'mineflayer';
-import type { ToolContext, ToolStreamGenerator } from '@strands-agents/sdk';
+import type { InvokableTool, Tool, ToolContext, ToolResultBlock, ToolStreamGenerator } from '@strands-agents/sdk';
 import type { LiveBody } from '../body.js';
 import { allTools } from '../tools/index.js';
 import { guardTools } from '../tools/connection-guard.js';
@@ -31,11 +31,7 @@ import { errorOutcome, toOutcome, type Body, type BodyEvent, type BodySnapshot, 
 /** Reflexes that move the body or collect on their own — off for every arm, so a gain is the brain's. */
 export const REFLEX_MODES_OFF = 'item_magnet,elbow_room,idle_staring';
 
-export interface MountedTool {
-  toolSpec: { name: string; description?: string; inputSchema?: unknown };
-  invoke: (input: unknown, context?: ToolContext) => Promise<unknown>;
-  stream: (context: ToolContext) => ToolStreamGenerator;
-}
+export type MountedTool = Tool & Partial<Pick<InvokableTool<unknown, unknown>, 'invoke'>>;
 
 /** What occupies each position, and whether it blocks movement (a full collision box). */
 export function probeBlocks(bot: Pick<Bot, 'blockAt'>, positions: Vec[], max = 256): Array<Vec & { name: string; solid: boolean }> {
@@ -46,24 +42,25 @@ export function probeBlocks(bot: Pick<Bot, 'blockAt'>, positions: Vec[], max = 2
 }
 
 /** Counts every tool call (policy steps, perception, agent calls alike): the body's own counter. */
-export function countingTools<T extends MountedTool>(tools: T[], counters: { toolCalls: number; toolErrors: number }, perTool: Record<string, number>): T[] {
+export function countingTools<T extends Tool>(tools: T[], counters: { toolCalls: number; toolErrors: number }, perTool: Record<string, number>): T[] {
   const started = (name: string) => {
     counters.toolCalls += 1;
     perTool[name] = (perTool[name] ?? 0) + 1;
   };
   return tools.map((t) => new Proxy(t, {
     get(obj, prop) {
-      if (prop === 'invoke') {
+      const invokable = obj as T & Partial<InvokableTool<unknown, unknown>>;
+      if (prop === 'invoke' && typeof invokable.invoke === 'function') {
         return async (input: unknown, context?: ToolContext) => {
           started(obj.toolSpec.name);
-          try { return await obj.invoke(input, context); } catch (err) { counters.toolErrors += 1; throw err; }
+          try { return await invokable.invoke!(input, context); } catch (err) { counters.toolErrors += 1; throw err; }
         };
       }
       if (prop === 'stream') {
         return async function* (context: ToolContext): ToolStreamGenerator {
           started(obj.toolSpec.name);
           try {
-            const result = yield* obj.stream(context);
+            const result: ToolResultBlock = yield* obj.stream(context);
             if (result.status === 'error') counters.toolErrors += 1;
             return result;
           } catch (err) {
@@ -92,7 +89,7 @@ export class Rig implements Body {
   constructor(readonly body: LiveBody, opts: { rails?: boolean } = {}) {
     const bot = body.bot;
     // capture_view needs the prismarine viewer (a port + headless Chrome) — not part of the benchmark.
-    const base = (allTools(bot) as unknown as MountedTool[]).filter((t) => t.toolSpec.name !== 'capture_view');
+    const base = allTools(bot).filter((t) => t.toolSpec.name !== 'capture_view');
     const guarded = guardTools(base, { epoch: body.epoch, detail: () => `The body was ${bot.username} at the time of the drop.` });
     this.tools = countingTools(guarded, this.counters, this.toolCounts);
     if (opts.rails === false) return;
@@ -129,7 +126,12 @@ export class Rig implements Body {
     const t = this.tools.find((x) => x.toolSpec.name === tool);
     if (!t) return { ok: false, text: `No tool named '${tool}' on this body.`, data: null };
     this.inFlight += 1;
-    try { return toOutcome(await t.invoke(args)); } catch (err) { return errorOutcome(err); } finally { this.inFlight -= 1; }
+    try {
+      if (typeof t.invoke !== 'function') {
+        return { ok: false, text: `Tool '${tool}' cannot be invoked directly.`, data: null };
+      }
+      return toOutcome(await t.invoke(args));
+    } catch (err) { return errorOutcome(err); } finally { this.inFlight -= 1; }
   }
 
   blocks(positions: Vec[]) { return probeBlocks(this.body.bot, positions); }
