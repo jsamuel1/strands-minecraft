@@ -8,6 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { FunctionTool, type JSONValue, type ToolContext } from '@strands-agents/sdk';
 import { guardEpoch, guardTools, connectionLostMessage } from '../src/tools/connection-guard.js';
 
 const POLL = 10; // tests do not need a quarter-second of patience
@@ -94,6 +95,55 @@ test('guardTools: the boat case — the tool that killed the socket stops waitin
     () => (wrapped as FakeTool).invoke({ ref: 'boat' }) as Promise<unknown>,
     /connection dropped while 'place_entity' was in flight/,
     'issue #21: the boat packet got us kicked, and the boat tool then waited forever',
+  );
+});
+
+function toolContext(name: string, input: JSONValue = {}): ToolContext {
+  return {
+    toolUse: { name, toolUseId: `${name}-1`, input },
+    agent: {} as never,
+    invocationState: {},
+    cancelSignal: new AbortController().signal,
+    interrupt: () => { throw new Error('not used'); },
+  };
+}
+
+async function finish<T>(stream: AsyncGenerator<unknown, T, unknown>): Promise<T> {
+  let next = await stream.next();
+  while (!next.done) next = await stream.next();
+  return next.value;
+}
+
+test('guardTools: SDK FunctionTool stream keeps context and result when epoch stays live', async () => {
+  let epoch = 4;
+  let seen: ToolContext | undefined;
+  const real = new FunctionTool({
+    name: 'place_entity', description: 'place', inputSchema: { type: 'object' },
+    callback: (_input, context) => { seen = context; return 'placed'; },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const context = toolContext('place_entity');
+  const result = await finish(wrapped.stream(context));
+  assert.equal(result.status, 'success');
+  assert.equal(seen, context, 'full SDK ToolContext reaches the real callback');
+  epoch = 5;
+});
+
+test('guardTools: SDK stream waiting on a dead socket rejects after reconnect', async () => {
+  let epoch = 1;
+  const real = new FunctionTool({
+    name: 'container_transact', description: 'open', inputSchema: { type: 'object' },
+    callback: async () => new Promise(() => {}),
+  });
+  const [wrapped] = guardTools([real], {
+    epoch: () => epoch,
+    pollMs: POLL,
+    detail: () => 'The body was StrandsBot at the time of the drop.',
+  });
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  await assert.rejects(
+    () => finish(wrapped.stream(toolContext('container_transact'))),
+    /connection dropped while 'container_transact' was in flight.*result is UNKNOWN.*StrandsBot/s,
   );
 });
 
