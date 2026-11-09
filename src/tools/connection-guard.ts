@@ -46,9 +46,9 @@ export function connectionLostMessage(o: { tool: string; detail?: string }): str
  */
 export async function guardEpoch<T>(
   work: Promise<T>,
-  o: { tool: string; epoch: () => number; pollMs?: number; detail?: () => string | undefined },
+  o: { tool: string; epoch: () => number; startedEpoch?: number; pollMs?: number; detail?: () => string | undefined },
 ): Promise<T> {
-  const started = o.epoch();
+  const started = o.startedEpoch ?? o.epoch();
   const pollMs = o.pollMs ?? 250;
   // ONE settlement handler for the whole race: attaching a fresh `.then` per
   // poll would also mean a fresh unhandled-rejection risk per poll.
@@ -92,11 +92,15 @@ function guardedStream(
   source: AsyncGenerator<unknown, unknown, unknown>,
   o: { tool: string; epoch: () => number; pollMs?: number; detail?: () => string | undefined },
 ): AsyncGenerator<unknown, unknown, unknown> {
+  const started = o.epoch();
   return (async function* () {
     let done = false;
     try {
       for (;;) {
-        const next = await guardEpoch(source.next(), o);
+        if (o.epoch() !== started) {
+          throw new Error(connectionLostMessage({ tool: o.tool, detail: o.detail?.() }));
+        }
+        const next = await guardEpoch(source.next(), { ...o, startedEpoch: started });
         if (next.done) {
           done = true;
           return next.value;
@@ -127,10 +131,10 @@ export function guardTools<T>(tools: T[], o: { epoch: () => number; pollMs?: num
   return tools.map((t) => {
     const target = t as MountedTool;
     const name = target.toolSpec?.name ?? 'tool';
-    if (typeof target.invoke !== 'function' || skip.has(name)) return t;
+    if ((typeof target.invoke !== 'function' && typeof target.stream !== 'function') || skip.has(name)) return t;
     return new Proxy(target, {
       get(obj, prop) {
-        if (prop === 'invoke') {
+        if (prop === 'invoke' && typeof obj.invoke === 'function') {
           return (...args: unknown[]) =>
             guardEpoch(Promise.resolve((obj.invoke as (...a: unknown[]) => unknown).apply(obj, args)) as Promise<unknown>, {
               tool: name, epoch: o.epoch, pollMs: o.pollMs, detail: o.detail,

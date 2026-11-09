@@ -43,13 +43,17 @@ function toolContext(name: string, input: JSONValue = {}): ToolContext {
   };
 }
 
-test('rig: agent stream executions preserve context and count success/error exactly once', async () => {
+test('rig: agent stream executions preserve events/context and count success/error exactly once', async () => {
   const counters = { toolCalls: 0, toolErrors: 0 };
   const per: Record<string, number> = {};
   let seen: ToolContext | undefined;
   const ok = new FunctionTool({
     name: 'ok', description: '', inputSchema: { type: 'object' },
-    callback: (_input, context) => { seen = context; return 'done'; },
+    callback: async function* (_input, context) {
+      seen = context;
+      yield 'working';
+      return 'done';
+    },
   });
   const bad = new FunctionTool({
     name: 'bad', description: '', inputSchema: { type: 'object' },
@@ -57,13 +61,18 @@ test('rig: agent stream executions preserve context and count success/error exac
   });
   const [countedOk, countedBad] = countingTools([ok, bad], counters, per);
   const context = toolContext('ok');
-  let next = await countedOk.stream(context).next();
-  while (!next.done) next = await countedOk.stream(context).next();
+  const okStream = countedOk.stream(context);
+  const event = await okStream.next();
+  assert.equal(event.done, false);
+  assert.equal(event.value.data, 'working');
+  const next = await okStream.next();
+  assert.equal(next.done, true);
   assert.equal(next.value.status, 'success');
   assert.equal(seen, context, 'SDK ToolContext, including cancel signal, reaches callback unchanged');
 
-  let failed = await countedBad.stream(toolContext('bad')).next();
-  while (!failed.done) failed = await countedBad.stream(toolContext('bad')).next();
+  const badStream = countedBad.stream(toolContext('bad'));
+  let failed = await badStream.next();
+  while (!failed.done) failed = await badStream.next();
   assert.equal(failed.value.status, 'error');
   assert.deepEqual(counters, { toolCalls: 2, toolErrors: 1 });
   assert.deepEqual(per, { ok: 1, bad: 1 });

@@ -114,19 +114,69 @@ async function finish<T>(stream: AsyncGenerator<unknown, T, unknown>): Promise<T
   return next.value;
 }
 
-test('guardTools: SDK FunctionTool stream keeps context and result when epoch stays live', async () => {
+test('guardTools: SDK FunctionTool stream preserves events, context, and final result', async () => {
   let epoch = 4;
   let seen: ToolContext | undefined;
   const real = new FunctionTool({
     name: 'place_entity', description: 'place', inputSchema: { type: 'object' },
-    callback: (_input, context) => { seen = context; return 'placed'; },
+    callback: async function* (_input, context) {
+      seen = context;
+      yield 'placing';
+      return 'placed';
+    },
   });
   const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
   const context = toolContext('place_entity');
-  const result = await finish(wrapped.stream(context));
-  assert.equal(result.status, 'success');
+  const stream = wrapped.stream(context);
+  const event = await stream.next();
+  assert.equal(event.done, false);
+  assert.equal(event.value.data, 'placing');
+  const result = await stream.next();
+  assert.equal(result.done, true);
+  assert.equal(result.value.status, 'success');
   assert.equal(seen, context, 'full SDK ToolContext reaches the real callback');
-  epoch = 5;
+});
+
+test('guardTools: reconnect between stream events rejects the original execution epoch', async () => {
+  let epoch = 1;
+  const real = new FunctionTool({
+    name: 'dig_vein', description: 'dig', inputSchema: { type: 'object' },
+    callback: async function* () {
+      yield 'first block';
+      return 'done';
+    },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const stream = wrapped.stream(toolContext('dig_vein'));
+  const event = await stream.next();
+  assert.equal(event.done, false);
+  epoch = 2;
+  await assert.rejects(
+    () => stream.next(),
+    /connection dropped while 'dig_vein' was in flight/,
+  );
+});
+
+class StreamOnlyTool {
+  readonly name = 'stream_only';
+  readonly description = 'stream-only SDK tool';
+  readonly toolSpec = { name: this.name, description: this.description, inputSchema: { type: 'object' } };
+  async *stream(context: ToolContext) {
+    await new Promise<void>(() => {});
+    return { status: 'success', toolUseId: context.toolUse.toolUseId, content: [] } as never;
+  }
+}
+
+test('guardTools: SDK stream-only Tool is guarded without an invoke method', async () => {
+  let epoch = 1;
+  const real = new StreamOnlyTool();
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  assert.notEqual(wrapped, real, 'Tool.stream is the SDK contract; invoke is optional');
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  await assert.rejects(
+    () => finish(wrapped.stream(toolContext(real.name))),
+    /connection dropped while 'stream_only' was in flight/,
+  );
 });
 
 test('guardTools: SDK stream waiting on a dead socket rejects after reconnect', async () => {
