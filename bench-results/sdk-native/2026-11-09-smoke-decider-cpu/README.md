@@ -5,6 +5,11 @@ This is NOT a v3 result and not a benchmark cohort. It is a smoke test of the ne
 harness: n = 1 per task, two tasks, one arm. Do not compare it with
 `bench-results/RESULTS-v3.md` as a result.
 
+`run.json` is the manifest written by harness `3689192` during the run.
+Later harness versions write more provenance fields, but this historical smoke
+manifest stays byte-for-byte as produced. Image digest remains recorded in each
+immutable episode row and summarized below.
+
 - Arm `decider`: `SelfHostedDecisionModel` → `strands-decider serve
   StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --device cpu` (strands-decider
   0.3.0 from PyPI, torch 2.15.0+cpu, transformers 5.22.2), on the same host
