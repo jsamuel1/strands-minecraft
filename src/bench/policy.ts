@@ -597,6 +597,8 @@ export interface Decision {
   reason: string;
   lastStepP: number | null;
   probabilitySum: number | null;
+  /** True when this call ended because the episode-owned wall signal fired. */
+  timedOut: boolean;
   request: { state: Record<string, unknown>; options: Record<string, string> };
 }
 
@@ -632,16 +634,19 @@ export class PolicyBrain {
     const request = { state, options: Object.fromEntries(acts.map((a) => [a.id, a.description])) };
     const n = this.decisions.length + 1;
     const stateChars = pyJson(state).length;
-    const base = { step: n, options: acts.length, stateChars, request, outcome: '', transportOk: true, probabilitySum: null } as const;
+    const base = { step: n, options: acts.length, stateChars, request, outcome: '', transportOk: true, probabilitySum: null, timedOut: false } as const;
     const t0 = performance.now();
     let resp;
     try {
       resp = await this.model.ask(serializeState(state), questions as Record<string, Question>, { cancelSignal });
     } catch (err) {
+      const timedOut = cancelSignal?.aborted === true;
       const msg = `${err instanceof Error ? err.name : 'Error'}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
       const d: Decision = {
-        ...base, action: 'error', confidence: null, top: [], modelId: null, latencyMs: performance.now() - t0, serverLatencyMs: null,
-        usage: {}, transportOk: false, error: msg, verdict: 'no_effect', check: 'the decision call raised; no action ran', reason: msg, lastStepP: null,
+        ...base, timedOut, action: timedOut ? 'timeout' : 'error', confidence: null, top: [], modelId: null, latencyMs: performance.now() - t0, serverLatencyMs: null,
+        usage: {}, transportOk: false, error: msg, verdict: 'no_effect',
+        check: timedOut ? 'the episode wall deadline cancelled the decision; no action ran' : 'the decision call raised; no action ran',
+        reason: timedOut ? 'episode wall deadline reached' : msg, lastStepP: null,
       };
       this.decisions.push(d);
       return d;

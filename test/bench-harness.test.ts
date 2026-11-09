@@ -289,6 +289,30 @@ test('policy episode: each native decision receives the remaining wall budget as
   assert.equal(ep.cap_hit, 'steps');
 });
 
+test('policy episode: episode-owned decision cancellation is a wall cap, not a provider failure', async () => {
+  const controller = new AbortController();
+  class Cancelled extends DecisionModel {
+    protected async _ask(): Promise<never> {
+      controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      throw controller.signal.reason;
+    }
+  }
+  const b = new FakeBody();
+  const ep = newEpisode({ run_id: 'r', arm: 'fake', kind: 'policy', model_label: 's', task: 'wood_tools', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
+  await runPolicy(ep, new Cancelled(), PROFILES.decider, { ...TASKS.wood_tools, maxWallS: 2 }, b, {}, fakeClock(), {
+    wait: noWait,
+    timeoutSignal: () => controller.signal,
+  });
+  assert.equal(ep.steps, 0, 'deadline fired before any embodied action');
+  assert.equal(ep.model_calls, 1);
+  assert.equal(ep.provider_errors.TimeoutError, undefined, 'episode timeout is not blamed on provider');
+  assert.deepEqual(ep.error_samples, {});
+  assert.equal(ep.throttles, 0);
+  assert.equal(ep.cap_hit, 'wall');
+  assert.equal(ep.decisions[0].action, 'timeout');
+  assert.equal(ep.decisions[0].reason, 'episode wall deadline reached');
+});
+
 test('policy episode: a terminal decision-model failure is recorded once without consuming an embodied step', async () => {
   class Broken extends DecisionModel { protected async _ask(): Promise<never> { const e = new Error('HTTP 503'); e.name = 'ModelThrottledError'; throw e; } }
   const b = new FakeBody();

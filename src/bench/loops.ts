@@ -59,7 +59,10 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     // defaults (or a hung custom fetch) must not let one decision overrun it.
     const d = await brain.step(timeoutSignal(Math.max(1, Math.floor((task.maxWallS - used) * 1000))));
     ep.model_calls += 1;
-    if (d.action === 'error' && d.error) {
+    if (d.timedOut) {
+      // Episode-owned cancellation is budget exhaustion, not provider failure.
+      // Keep decision evidence, but do not blame the model or consume a body step.
+    } else if (d.action === 'error' && d.error) {
       terminalFailure = true;
       const name = d.error.split(':')[0];
       ep.provider_errors[name] = (ep.provider_errors[name] ?? 0) + 1;
@@ -74,7 +77,7 @@ export async function runPolicy(ep: Episode, model: DecisionModel, profile: Cont
     ep.tokens_out += d.usage.outputTokens ?? 0;
     ep.actions.push(`${d.action}:${d.verdict}`);
     ep.decisions.push(decisionRow(d));
-    if (terminalFailure) break;
+    if (d.timedOut || terminalFailure) break;
     ep.steps += 1;
     const [done, progress] = task.check(await goalState(body, marks));
     const elapsed = clock.now() - t0;
