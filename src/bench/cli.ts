@@ -56,8 +56,14 @@ export function resolveOut(out: string | undefined, runId: string, cwd = process
 }
 
 /** A run owns the directory exclusively once any path exists there. */
-export function assertFreshRunOutput(dir: string): void {
-  if (existsSync(dir)) throw new Error(`${dir} exists — use a new run id/output; scored runs are append-immutable`);
+export function createFreshRunOutput(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: false });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') throw new Error(`${dir} exists — use a new run id/output; scored runs are append-immutable`, { cause: err });
+    throw err;
+  }
 }
 
 async function llm() {
@@ -135,8 +141,7 @@ function runCmd(flags: Record<string, string>) {
   if (!Number.isInteger(n) || n < 1) throw new Error(`--n must be a positive integer, got ${JSON.stringify(flags.n)}`);
   const runId = flags['run-id'] || `${new Date().toISOString().slice(0, 10)}-${arms.join('+')}`;
   const out = resolveOut(flags.out, runId);
-  assertFreshRunOutput(out);
-  mkdirSync(out, { recursive: false });
+  createFreshRunOutput(out);
   const manifest = buildRunManifest({
     runId,
     arms,

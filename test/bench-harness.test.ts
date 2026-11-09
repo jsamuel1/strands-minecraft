@@ -18,7 +18,7 @@ import { runPolicy, runAgent, buildAgent, type Clock } from '../src/bench/loops.
 import { BENCH_BODY_ENV } from '../src/bench/runner.js';
 import { newEpisode, pct } from '../src/bench/episode.js';
 import { table } from '../src/bench/report.js';
-import { resolveOut, assertFreshRunOutput, parseArgs, buildRunManifest } from '../src/bench/cli.js';
+import { resolveOut, createFreshRunOutput, parseArgs, buildRunManifest } from '../src/bench/cli.js';
 import { dockerRunArgs } from '../src/bench/world.js';
 import { SelfHostedDecisionModel } from '../src/bench/decider.js';
 
@@ -355,8 +355,10 @@ test('results guard: new results only under bench-results/sdk-native; v3 results
   assert.doesNotThrow(() => resolveOut('/tmp/scratch-run', 'x', '/repo'));
   const existing = mkdtempSync(join(tmpdir(), 'mcbench-existing-'));
   try {
-    assert.throws(() => assertFreshRunOutput(existing), /scored runs are append-immutable/);
-    assert.doesNotThrow(() => assertFreshRunOutput(join(existing, 'new-run')));
+    assert.throws(() => createFreshRunOutput(existing), /scored runs are append-immutable/);
+    const fresh = join(existing, 'new-run');
+    assert.doesNotThrow(() => createFreshRunOutput(fresh));
+    assert.throws(() => createFreshRunOutput(fresh), /scored runs are append-immutable/);
   } finally {
     rmSync(existing, { recursive: true, force: true });
   }
