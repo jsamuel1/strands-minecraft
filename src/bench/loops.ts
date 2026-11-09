@@ -18,7 +18,7 @@ import { decisionRow, pct, type Episode } from './episode.js';
 export interface Clock { now(): number }
 export const realClock: Clock = { now: () => performance.now() / 1000 };
 
-export interface Marks { tablesAtStart?: number; placedTable?: boolean; sawNight?: boolean; passedNight?: boolean }
+export interface Marks { tablesAtStart?: number; placedTable?: boolean; sawNight?: boolean; passedNight?: boolean; lastTimeOfDay?: number }
 
 async function tablesNear(body: Body): Promise<number> {
   const o = await body.call('find_blocks', { name: 'crafting_table', maxDistance: 8, count: 4 });
@@ -120,6 +120,7 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
     const remainingMs = Math.max(1, Math.floor((task.maxWallS - used) * 1000));
     let cancelled = false;
     let invocationFailed = false;
+    const toolCallsBefore = body.state().counters.toolCalls;
     body.setBusy(true);
     try {
       const r = await agent.invoke(prompt, { limits: { turns: 4 }, cancelSignal: AbortSignal.timeout(remainingMs) });
@@ -139,6 +140,11 @@ export async function runAgent(ep: Episode, agent: Agent, task: Task, body: Body
     } finally {
       body.setBusy(false);
     }
+    const actionAttempted = body.state().counters.toolCalls > toolCallsBefore;
+    // A provider failure before any tool ran is not an embodied step. If tools
+    // did run before a later model failure, preserve that step and judge its
+    // resulting world state once before stopping.
+    if (invocationFailed && !actionAttempted) break;
     ep.steps += 1;
     const [done, progress] = task.check(await goalState(body, marks));
     ep.progress = progress;

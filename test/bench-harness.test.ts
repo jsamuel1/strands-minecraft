@@ -286,7 +286,7 @@ test('agent episode: a terminal model failure is recorded once and stops before 
   const b = new FakeBody();
   const ep = newEpisode({ run_id: 'r', arm: 'agent', kind: 'agent', model_label: 'broken', task: 'logs16', episode: 1, seed: '1', mc_version: 'x', brain_commit: null, strands_sdk: '1.24.0' });
   await runAgent(ep, buildAgent(new BrokenModel(), [], 'test'), { ...TASKS.logs16, maxSteps: 4 }, b, {}, fakeClock());
-  assert.equal(ep.steps, 1);
+  assert.equal(ep.steps, 0, 'provider failed before any embodied tool action');
   assert.equal(ep.model_calls, 1);
   assert.equal(ep.provider_errors.ModelError, 1);
   assert.match(ep.error_samples.ModelError, /provider unavailable/);
@@ -306,6 +306,14 @@ test('task suite is v3\'s: ids, step caps and wall caps', () => {
   applyMarks({ inv: {}, timeOfDay: 14000, counters: { deaths: 0 } }, n, 0);
   assert.equal(TASKS.night.check(applyMarks({ inv: {}, timeOfDay: 500, counters: { deaths: 0 } }, n, 0))[0], true);
   assert.equal(TASKS.night.check(applyMarks({ inv: {}, timeOfDay: 500, counters: { deaths: 1 } }, n, 0))[0], false);
+  const longTurn = {};
+  applyMarks({ inv: {}, timeOfDay: 12500, counters: { deaths: 0 } }, longTurn, 0);
+  assert.equal(TASKS.night.check(applyMarks({ inv: {}, timeOfDay: 999, counters: { deaths: 0 } }, longTurn, 0))[0], true,
+    'one long turn spanning dusk through clock wrap still proves night passed');
+  const backwardsJitter = {};
+  applyMarks({ inv: {}, timeOfDay: 5000, counters: { deaths: 0 } }, backwardsJitter, 0);
+  assert.equal(TASKS.night.check(applyMarks({ inv: {}, timeOfDay: 4999, counters: { deaths: 0 } }, backwardsJitter, 0))[0], false,
+    'a small backwards clock adjustment is not a night wrap');
 });
 
 test('reset is reproducible: fixed image tag, version, seed, tmpfs world, localhost-only ports', () => {

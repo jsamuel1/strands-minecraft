@@ -13,6 +13,8 @@ export interface BodyState {
   /** Harness marks (world truth the harness measured, never the model). */
   _placedTable?: boolean;
   _passedNight?: boolean;
+  /** Previous sampled day clock, used to prove a night→day wrap even when one long turn spans it. */
+  _lastTimeOfDay?: number;
 }
 
 export interface Task {
@@ -66,14 +68,16 @@ export const TASKS: Readonly<Record<string, Task>> = Object.freeze(Object.fromEn
 
 /** Harness marks from world truth: placed table, night passed. Mutates `marks`; pure over its inputs. */
 export function applyMarks(
-  s: Omit<BodyState, '_placedTable' | '_passedNight'>,
-  marks: { tablesAtStart?: number; placedTable?: boolean; sawNight?: boolean; passedNight?: boolean },
+  s: Omit<BodyState, '_placedTable' | '_passedNight' | '_lastTimeOfDay'>,
+  marks: { tablesAtStart?: number; placedTable?: boolean; sawNight?: boolean; passedNight?: boolean; lastTimeOfDay?: number },
   tablesNear: number,
 ): BodyState {
   if (marks.tablesAtStart === undefined) marks.tablesAtStart = tablesNear;
   else if (!marks.placedTable && tablesNear > marks.tablesAtStart) marks.placedTable = true;
   const t = s.timeOfDay ?? 0;
-  if (t >= 13000) marks.sawNight = true;
-  if (marks.sawNight && t >= 0 && t < 1000) marks.passedNight = true;
-  return { ...s, _placedTable: !!marks.placedTable, _passedNight: !!marks.passedNight };
+  const wrapped = marks.lastTimeOfDay !== undefined && marks.lastTimeOfDay >= 12000 && t < 1000;
+  if (t >= 13000 || wrapped) marks.sawNight = true;
+  if (wrapped || (marks.sawNight && t >= 0 && t < 1000)) marks.passedNight = true;
+  marks.lastTimeOfDay = t;
+  return { ...s, _placedTable: !!marks.placedTable, _passedNight: !!marks.passedNight, _lastTimeOfDay: marks.lastTimeOfDay };
 }
