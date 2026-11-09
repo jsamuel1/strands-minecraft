@@ -15,9 +15,11 @@ goal?") run a Minecraft body end to end, and where does it hand off to an LLM?
 ## Setup
 
 - **Harness.** [strands-minecraft](https://github.com/cagataycali/strands-minecraft) with a Python brain
-  (strands-py) driving a Node mineflayer body over MCP. Worktree branch `feat/bench-v3`, harness commit
-  `767379d` for the decision models. Agent rows come from `c7e45cb`, which differs only in what the
-  *decision* models are shown (see Caveats).
+  (strands-py) driving a Node mineflayer body over MCP. The original measurement branch was
+  `feat/bench-v3`: decision-model rows used harness commit `767379d`; agent rows used `c7e45cb`, which
+  differs only in what the *decision* models are shown (see Caveats). This public branch is a scrubbed
+  squash, so those original harness SHAs remain provenance labels in the raw rows but do not resolve as
+  commits on the fork.
 - **World.** Minecraft 1.21.11 (itzg), seed `8675309`, a fresh world on tmpfs and a fresh body per episode,
   one bot per server. Reflexes that move or collect on their own (item_magnet, elbow_room, idle_staring) are
   off for every arm; the remaining safety reflexes are on for every arm.
