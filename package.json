@@ -1,7 +1,7 @@
 {
   "name": "strands-minecraft",
   "version": "0.1.0",
-  "description": "Give an LLM a body \u2014 a Minecraft bot that is a real Strands agent: 100% of mineflayer as tools.",
+  "description": "Give an LLM a body — a Minecraft bot that is a real Strands agent: 100% of mineflayer as tools.",
   "keywords": [
     "minecraft",
     "mineflayer",
@@ -48,12 +48,13 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "tsx --test test/*.test.ts",
+    "bench": "tsx src/bench/cli.ts",
     "enroll": "npx -y tiny-tech@latest enroll --body strands-the-miner",
     "probe:digprice": "node scripts/probes/probe-digprice.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.2",
-    "@strands-agents/sdk": "^1.13.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@types/ws": "^8.18.1",
     "canvas": "^3.2.3",
     "dotenv": "^17.4.2",

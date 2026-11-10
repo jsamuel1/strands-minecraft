@@ -5,6 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Agent, FunctionTool, Model, TextBlock, ToolResultBlock, type JSONValue, type Message, type ModelStreamEvent, type StreamOptions, type ToolContext } from '@strands-agents/sdk';
 import { makeExecuteTool, absorbTurn, type AgentLike } from '../src/voicecall.js';
 
 const fakeTool = (name: string, impl: (args: unknown) => unknown) => ({
@@ -20,6 +21,85 @@ test('makeExecuteTool: dispatches by toolSpec.name, strings pass through, object
   assert.equal(await exec('greet', {}), 'hello');
   assert.equal(await exec('status', {}), '{"hp":20}');
   assert.match(await exec('nope', {}), /no tool named nope/);
+});
+
+test('makeExecuteTool: stream-only SDK Tool preserves context and returns final result', async () => {
+  let seen: ToolContext | undefined;
+  const progress: unknown[] = [];
+  const streamOnly = {
+    name: 'stream_only',
+    description: 'stream-only SDK tool',
+    toolSpec: { name: 'stream_only', description: 'stream-only SDK tool', inputSchema: { type: 'object' as const } },
+    async *stream(context: ToolContext) {
+      seen = context;
+      progress.push('working');
+      yield { type: 'toolStreamEvent' as const, data: 'working' };
+      return new ToolResultBlock({
+        toolUseId: context.toolUse.toolUseId,
+        status: 'success',
+        content: [new TextBlock('done')],
+      });
+    },
+  };
+  const controller = new AbortController();
+  const agent = {} as ToolContext['agent'];
+  const exec = makeExecuteTool([streamOnly], undefined, { agent, cancelSignal: controller.signal, invocationState: { rail: 'voice' } });
+  assert.equal(await exec('stream_only', { n: 1 }), 'done');
+  assert.deepEqual(progress, ['working']);
+  assert.equal(seen?.toolUse.name, 'stream_only');
+  assert.deepEqual(seen?.toolUse.input, { n: 1 });
+  assert.equal(seen?.agent, agent);
+  assert.equal(seen?.cancelSignal, controller.signal);
+  assert.equal(seen?.invocationState.rail, 'voice');
+});
+
+class OneVoiceToolModel extends Model {
+  private calls = 0;
+  updateConfig() {}
+  getConfig() { return { modelId: 'voice-tool' }; }
+  async *stream(_messages: Message[], _options?: StreamOptions): AsyncIterable<ModelStreamEvent> {
+    this.calls += 1;
+    yield { type: 'modelMessageStartEvent', role: 'assistant' };
+    if (this.calls === 1) {
+      yield { type: 'modelContentBlockStartEvent', start: { type: 'toolUseStart', name: 'act', toolUseId: 'act-1' } };
+      yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'toolUseInputDelta', input: '{"n":1}' } };
+      yield { type: 'modelContentBlockStopEvent' };
+      yield { type: 'modelMessageStopEvent', stopReason: 'toolUse' };
+    } else {
+      yield { type: 'modelContentBlockStartEvent' };
+      yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'textDelta', text: 'done' } };
+      yield { type: 'modelContentBlockStopEvent' };
+      yield { type: 'modelMessageStopEvent', stopReason: 'endTurn' };
+    }
+    yield { type: 'modelMetadataEvent', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } };
+  }
+}
+
+test('makeExecuteTool: same SDK tool works through Agent stream and direct voice stream', async () => {
+  const contexts: ToolContext[] = [];
+  const action = new FunctionTool({
+    name: 'act', description: 'act', inputSchema: { type: 'object' },
+    callback: (input, context) => { contexts.push(context); return { input: input as JSONValue, path: contexts.length }; },
+  });
+  const sdkAgent = new Agent({ model: new OneVoiceToolModel(), tools: [action], printer: false });
+  assert.equal((await sdkAgent.invoke('act', { limits: { turns: 2 } })).stopReason, 'endTurn');
+  const direct = makeExecuteTool([action], undefined, { agent: sdkAgent });
+  assert.equal(await direct('act', { n: 2 }), '{"input":{"n":2},"path":2}');
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[0].toolUse.name, 'act');
+  assert.equal(contexts[1].toolUse.name, 'act');
+  assert.equal(contexts[1].agent, sdkAgent);
+});
+
+test('makeExecuteTool: stream error result becomes spoken error prose', async () => {
+  const streamOnly = {
+    name: 'bad', description: 'bad',
+    toolSpec: { name: 'bad', description: 'bad', inputSchema: { type: 'object' as const } },
+    async *stream(context: ToolContext) {
+      return new ToolResultBlock({ status: 'error', toolUseId: context.toolUse.toolUseId, content: [], error: new Error('stream failed') });
+    },
+  };
+  assert.equal(await makeExecuteTool([streamOnly])('bad', {}), 'error: stream failed');
 });
 
 test('makeExecuteTool: intercepts ImageBlocks — spoken context never eats base64', async () => {

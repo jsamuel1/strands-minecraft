@@ -8,6 +8,16 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  Agent,
+  FunctionTool,
+  Model,
+  type JSONValue,
+  type Message,
+  type StreamOptions,
+  type Tool,
+  type ToolContext,
+} from '@strands-agents/sdk';
 import { guardEpoch, guardTools, connectionLostMessage } from '../src/tools/connection-guard.js';
 
 const POLL = 10; // tests do not need a quarter-second of patience
@@ -95,6 +105,151 @@ test('guardTools: the boat case — the tool that killed the socket stops waitin
     /connection dropped while 'place_entity' was in flight/,
     'issue #21: the boat packet got us kicked, and the boat tool then waited forever',
   );
+});
+
+function toolContext(name: string, input: JSONValue = {}): ToolContext {
+  return {
+    toolUse: { name, toolUseId: `${name}-1`, input },
+    agent: {} as never,
+    invocationState: {},
+    cancelSignal: new AbortController().signal,
+    interrupt: () => { throw new Error('not used'); },
+  };
+}
+
+async function finish<T>(stream: AsyncGenerator<unknown, T, unknown>): Promise<T> {
+  let next = await stream.next();
+  while (!next.done) next = await stream.next();
+  return next.value;
+}
+
+class OneToolModel extends Model {
+  private calls = 0;
+  constructor(private readonly name: string) { super(); }
+  updateConfig() {}
+  getConfig() { return { modelId: 'one-tool' }; }
+  async *stream(_messages: Message[], _options?: StreamOptions) {
+    this.calls += 1;
+    yield { type: 'modelMessageStartEvent' as const, role: 'assistant' as const };
+    if (this.calls === 1) {
+      yield { type: 'modelContentBlockStartEvent' as const, start: { type: 'toolUseStart' as const, name: this.name, toolUseId: `${this.name}-1` } };
+      yield { type: 'modelContentBlockDeltaEvent' as const, delta: { type: 'toolUseInputDelta' as const, input: '{}' } };
+      yield { type: 'modelContentBlockStopEvent' as const };
+      yield { type: 'modelMessageStopEvent' as const, stopReason: 'toolUse' as const };
+    } else {
+      yield { type: 'modelContentBlockStartEvent' as const };
+      yield { type: 'modelContentBlockDeltaEvent' as const, delta: { type: 'textDelta' as const, text: 'done' } };
+      yield { type: 'modelContentBlockStopEvent' as const };
+      yield { type: 'modelMessageStopEvent' as const, stopReason: 'endTurn' as const };
+    }
+    yield { type: 'modelMetadataEvent' as const, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } };
+  }
+}
+
+test('guardTools: SDK FunctionTool stream preserves events, context, and final result', async () => {
+  let epoch = 4;
+  let seen: ToolContext | undefined;
+  const real = new FunctionTool({
+    name: 'place_entity', description: 'place', inputSchema: { type: 'object' },
+    callback: async function* (_input, context) {
+      seen = context;
+      yield 'placing';
+      return 'placed';
+    },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const context = toolContext('place_entity');
+  const stream = wrapped.stream(context);
+  const event = await stream.next();
+  assert.equal(event.done, false);
+  assert.equal(event.value.data, 'placing');
+  const result = await stream.next();
+  assert.equal(result.done, true);
+  assert.equal(result.value.status, 'success');
+  assert.equal(seen, context, 'full SDK ToolContext reaches the real callback');
+});
+
+test('guardTools: reconnect between stream events rejects the original execution epoch', async () => {
+  let epoch = 1;
+  const real = new FunctionTool({
+    name: 'dig_vein', description: 'dig', inputSchema: { type: 'object' },
+    callback: async function* () {
+      yield 'first block';
+      return 'done';
+    },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const stream = wrapped.stream(toolContext('dig_vein'));
+  const event = await stream.next();
+  assert.equal(event.done, false);
+  epoch = 2;
+  await assert.rejects(
+    () => stream.next(),
+    /connection dropped while 'dig_vein' was in flight/,
+  );
+});
+
+class StreamOnlyTool {
+  readonly name = 'stream_only';
+  readonly description = 'stream-only SDK tool';
+  readonly toolSpec = { name: this.name, description: this.description, inputSchema: { type: 'object' } };
+  async *stream(context: ToolContext) {
+    await new Promise<void>(() => {});
+    return { status: 'success', toolUseId: context.toolUse.toolUseId, content: [] } as never;
+  }
+}
+
+test('guardTools: SDK stream-only Tool is guarded without an invoke method', async () => {
+  let epoch = 1;
+  const real = new StreamOnlyTool();
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  assert.notEqual(wrapped, real, 'Tool.stream is the SDK contract; invoke is optional');
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  await assert.rejects(
+    () => finish(wrapped.stream(toolContext(real.name))),
+    /connection dropped while 'stream_only' was in flight/,
+  );
+});
+
+test('guardTools: SDK stream waiting on a dead socket rejects after reconnect', async () => {
+  let epoch = 1;
+  const real = new FunctionTool({
+    name: 'container_transact', description: 'open', inputSchema: { type: 'object' },
+    callback: async () => new Promise(() => {}),
+  });
+  const [wrapped] = guardTools([real], {
+    epoch: () => epoch,
+    pollMs: POLL,
+    detail: () => 'The body was StrandsBot at the time of the drop.',
+  });
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  await assert.rejects(
+    () => finish(wrapped.stream(toolContext('container_transact'))),
+    /connection dropped while 'container_transact' was in flight.*result is UNKNOWN.*StrandsBot/s,
+  );
+});
+
+test('guardTools: real SDK Agent executes the guarded stream path after reconnect', async () => {
+  let epoch = 1;
+  let invoked = 0;
+  const real = new FunctionTool({
+    name: 'container_transact', description: 'open', inputSchema: { type: 'object' },
+    callback: async () => {
+      invoked += 1;
+      return new Promise(() => {});
+    },
+  });
+  const [wrapped] = guardTools([real], { epoch: () => epoch, pollMs: POLL });
+  const agent = new Agent({ model: new OneToolModel(real.name), tools: [wrapped as Tool], printer: false });
+  setTimeout(() => { epoch = 2; }, POLL * 2);
+  const result = await agent.invoke('open it', { limits: { turns: 2 } });
+  assert.equal(result.stopReason, 'endTurn');
+  assert.equal(invoked, 1);
+  const errors = agent.messages.flatMap((message) => message.content)
+    .filter((block) => block.type === 'toolResultBlock')
+    .filter((block) => block.status === 'error');
+  assert.equal(errors.length, 1, 'Agent ToolExecutor consumed guarded Tool.stream and surfaced one error result');
+  assert.match(JSON.stringify(errors[0]), /connection dropped while 'container_transact' was in flight/);
 });
 
 test('guardTools: skip leaves a tool that is meant to span a reconnect alone', async () => {

@@ -28,6 +28,7 @@
  * disconnect is not worth a subscription lifecycle.
  */
 
+import type { Tool, ToolResultBlock, ToolStreamGenerator } from '@strands-agents/sdk';
 /** What the model is told when its action outlived the socket. */
 export function connectionLostMessage(o: { tool: string; detail?: string }): string {
   return (
@@ -46,9 +47,9 @@ export function connectionLostMessage(o: { tool: string; detail?: string }): str
  */
 export async function guardEpoch<T>(
   work: Promise<T>,
-  o: { tool: string; epoch: () => number; pollMs?: number; detail?: () => string | undefined },
+  o: { tool: string; epoch: () => number; startedEpoch?: number; pollMs?: number; detail?: () => string | undefined },
 ): Promise<T> {
-  const started = o.epoch();
+  const started = o.startedEpoch ?? o.epoch();
   const pollMs = o.pollMs ?? 250;
   // ONE settlement handler for the whole race: attaching a fresh `.then` per
   // poll would also mean a fresh unhandled-rejection risk per poll.
@@ -76,19 +77,49 @@ export async function guardEpoch<T>(
   }
 }
 
-/** The shape of a mounted Strands tool, as far as this file cares. */
-interface MountedTool {
-  toolSpec?: { name?: string };
+/** Runtime-tolerant view: production entries are SDK Tools; tests also cover legacy invoke-only objects. */
+type MountedTool = Partial<Pick<Tool, 'toolSpec' | 'stream'>> & {
   invoke?: (...args: unknown[]) => unknown;
+};
+
+/**
+ * Guard one SDK tool generator. Each `next()` can await body I/O, so each one
+ * races the live epoch. `return()` is queued but never awaited after a drop:
+ * an async generator paused on the dead emitter cannot process it yet.
+ */
+function guardedStream(
+  source: ToolStreamGenerator,
+  o: { tool: string; epoch: () => number; pollMs?: number; detail?: () => string | undefined },
+): ToolStreamGenerator {
+  const started = o.epoch();
+  return (async function* () {
+    let done = false;
+    try {
+      for (;;) {
+        if (o.epoch() !== started) {
+          throw new Error(connectionLostMessage({ tool: o.tool, detail: o.detail?.() }));
+        }
+        const next = await guardEpoch(source.next(), { ...o, startedEpoch: started });
+        if (next.done) {
+          done = true;
+          return next.value;
+        }
+        yield next.value;
+      }
+    } finally {
+      if (!done) void source.return(undefined as unknown as ToolResultBlock).catch(() => undefined);
+    }
+  })();
 }
 
 /**
  * Wrap mounted tools so each call is bound to the epoch it started on.
  *
- * A proxy, not a subclass or an `Object.create`: `invoke` is the only thing
- * that changes, every other property (toolSpec, name, whatever the SDK reads
- * off a tool) must reach the real object with `this` still pointing at it —
- * the same reason body.ts binds methods to the live bot rather than copying it.
+ * A proxy, not a subclass or an `Object.create`: `invoke` and the SDK Agent's
+ * `stream` execution path are guarded; every other property (toolSpec, name,
+ * whatever the SDK reads off a tool) must reach the real object with `this`
+ * still pointing at it — the same reason body.ts binds methods to the live bot
+ * rather than copying it.
  *
  * `guard` is opt-in per name via `skip`, because a few tools are SUPPOSED to
  * span a reconnect: nothing here does today, but `respawn` and anything that
@@ -99,14 +130,20 @@ export function guardTools<T>(tools: T[], o: { epoch: () => number; pollMs?: num
   return tools.map((t) => {
     const target = t as MountedTool;
     const name = target.toolSpec?.name ?? 'tool';
-    if (typeof target.invoke !== 'function' || skip.has(name)) return t;
+    if ((typeof target.invoke !== 'function' && typeof target.stream !== 'function') || skip.has(name)) return t;
     return new Proxy(target, {
       get(obj, prop) {
-        if (prop === 'invoke') {
+        if (prop === 'invoke' && typeof obj.invoke === 'function') {
           return (...args: unknown[]) =>
             guardEpoch(Promise.resolve((obj.invoke as (...a: unknown[]) => unknown).apply(obj, args)) as Promise<unknown>, {
               tool: name, epoch: o.epoch, pollMs: o.pollMs, detail: o.detail,
             });
+        }
+        if (prop === 'stream' && typeof obj.stream === 'function') {
+          return (...args: Parameters<Tool['stream']>) => guardedStream(
+            obj.stream!.apply(obj, args),
+            { tool: name, epoch: o.epoch, pollMs: o.pollMs, detail: o.detail },
+          );
         }
         const v = Reflect.get(obj, prop, obj);
         return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(obj) : v;
